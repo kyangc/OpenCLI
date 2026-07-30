@@ -24,7 +24,7 @@ const CACHE_FILE = path.join(CACHE_DIR, 'update-check.json');
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
 const EXTENSION_STALE_MS = 7 * 24 * 60 * 60 * 1000; // 7d
 const NPM_REGISTRY_URL = 'https://registry.npmjs.org/@jackwener/opencli/latest';
-const GITHUB_RELEASES_URL = 'https://api.github.com/repos/jackwener/OpenCLI/releases?per_page=20';
+const GITHUB_RELEASES_URL = 'https://api.github.com/repos/kyangc/OpenCLI/releases?per_page=20';
 
 interface UpdateCache {
   // CLI npm fetch fields — present once `checkForUpdateBackground` has succeeded.
@@ -74,15 +74,21 @@ function isNewer(a: string, b: string): boolean {
   const pa = parse(a);
   const pb = parse(b);
   if (pa.some(isNaN) || pb.some(isNaN)) return false;
-  const [aMaj, aMin, aPat] = pa;
-  const [bMaj, bMin, bPat] = pb;
-  if (aMaj !== bMaj) return aMaj > bMaj;
-  if (aMin !== bMin) return aMin > bMin;
-  return aPat > bPat;
+  const width = Math.max(pa.length, pb.length);
+  for (let i = 0; i < width; i++) {
+    const aPart = pa[i] ?? 0;
+    const bPart = pb[i] ?? 0;
+    if (aPart !== bPart) return aPart > bPart;
+  }
+  return false;
 }
 
 function isCI(): boolean {
   return !!(process.env.CI || process.env.CONTINUOUS_INTEGRATION);
+}
+
+function isKyangcBuild(version: string): boolean {
+  return /-kyangc\.\d+$/.test(version);
 }
 
 interface NoticeInputs {
@@ -100,7 +106,7 @@ interface NoticeLines {
 function buildUpdateNotices({ cliVersion, cache, now }: NoticeInputs): NoticeLines {
   if (!cache) return {};
   const lines: NoticeLines = {};
-  if (cache.latestVersion && isNewer(cache.latestVersion, cliVersion)) {
+  if (!isKyangcBuild(cliVersion) && cache.latestVersion && isNewer(cache.latestVersion, cliVersion)) {
     lines.cli =
       `\n  Update available: v${cliVersion} → v${cache.latestVersion}\n` +
       `  Run: npm install -g @jackwener/opencli\n`;
@@ -115,7 +121,7 @@ function buildUpdateNotices({ cliVersion, cache, now }: NoticeInputs): NoticeLin
   ) {
     lines.extension =
       `\n  Extension update available: v${currentExtensionVersion} → v${latestExtensionVersion}\n` +
-      `  Download: https://github.com/jackwener/opencli/releases\n`;
+      `  Download: https://github.com/kyangc/OpenCLI/releases\n`;
   }
   return lines;
 }
@@ -187,21 +193,23 @@ export function checkForUpdateBackground(): void {
 
   void (async () => {
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 3000);
-      const res = await fetch(NPM_REGISTRY_URL, {
-        signal: controller.signal,
-        headers: { 'User-Agent': `opencli/${PKG_VERSION}` },
-      });
-      clearTimeout(timer);
-      if (!res.ok) return;
-      const data = await res.json() as { version?: string };
-      if (typeof data.version === 'string') {
-        const extVersion = await fetchLatestExtensionVersion();
-        const updates: Partial<UpdateCache> = { lastCheck: Date.now(), latestVersion: data.version };
-        if (extVersion) updates.latestExtensionVersion = extVersion;
-        writeCacheMerge(updates);
+      const updates: Partial<UpdateCache> = { lastCheck: Date.now() };
+      if (!isKyangcBuild(PKG_VERSION)) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 3000);
+        const res = await fetch(NPM_REGISTRY_URL, {
+          signal: controller.signal,
+          headers: { 'User-Agent': `opencli/${PKG_VERSION}` },
+        });
+        clearTimeout(timer);
+        if (res.ok) {
+          const data = await res.json() as { version?: string };
+          if (typeof data.version === 'string') updates.latestVersion = data.version;
+        }
       }
+      const extVersion = await fetchLatestExtensionVersion();
+      if (extVersion) updates.latestExtensionVersion = extVersion;
+      writeCacheMerge(updates);
     } catch {
       // Network error: silently skip, try again next run
     }

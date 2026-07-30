@@ -1,9 +1,12 @@
 {
   "name": "opencli-extension",
-  "version": "1.0.22",
+  "version": "1.0.22-kyangc.2",
   "private": true,
   "opencli": {
-    "compatRange": ">=1.7.0"
+    "compatRange": ">=1.8.6"
+  },
+  "opencliFork": {
+    "release": "kyangc-v1.8.6.2"
   },
   "type": "module",
   "scripts": {
@@ -15,6 +18,10 @@
   "devDependencies": {
     "@types/chrome": "^0.0.287",
     "typescript": "^5.7.0",
-    "vite": "^6.0.0"
+    "vite": "^6.4.3"
+  },
+  "overrides": {
+    "picomatch": "^4.0.5",
+    "postcss": "^8.5.25"
   }
 }

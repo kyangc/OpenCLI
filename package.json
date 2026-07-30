@@ -1,8 +1,10 @@
 {
   "name": "@jackwener/opencli",
-  "version": "1.8.6",
-  "publishConfig": {
-    "access": "public"
+  "version": "1.8.6-kyangc.2",
+  "private": true,
+  "opencliFork": {
+    "release": "kyangc-v1.8.6.2",
+    "upstreamVersion": "1.8.6"
   },
   "description": "Make any website or Electron App your CLI. AI-powered.",
   "engines": {
@@ -59,6 +61,11 @@
     "test:adapter": "vitest run --project adapter",
     "test:all": "vitest run",
     "test:e2e": "vitest run --project e2e-fixed-port --project e2e",
+    "extension:typecheck": "npm run typecheck --prefix extension",
+    "extension:build": "npm run build --prefix extension",
+    "extension:package": "npm run package:release --prefix extension -- --out ../extension-package",
+    "check:fork-release": "node scripts/check-fork-release.mjs",
+    "verify:fork-release": "npm run check:fork-release && npm run typecheck && npm test && npm run build && npm run extension:typecheck && npm run extension:build && npm run extension:package",
     "advise:listing-id-pairing": "node scripts/check-listing-id-pairing.mjs",
     "check:silent-column-drop": "node scripts/check-silent-column-drop.mjs",
     "check:typed-error-lint": "node scripts/check-typed-error-lint.mjs",
@@ -76,7 +83,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jackwener/opencli.git"
+    "url": "git+https://github.com/kyangc/OpenCLI.git"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
