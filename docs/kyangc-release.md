@@ -111,9 +111,14 @@ rewrite `stable`.
 5. Build the CLI tarball and immutable unpacked extension artifact.
 6. Install the candidate CLI tarball and deploy the extension artifact to the
    fixed `browser-extension/current` directory.
-7. In `chrome://extensions`, re-enable and reload the unpacked extension.
-8. Restart the daemon, run `opencli doctor`, and execute one low-cost real
-   browser command plus the consuming application's read-only health checks.
+7. Explicitly remind the user that updating files does not update Chrome's
+   loaded manifest. Ask them to open `chrome://extensions`, re-enable the
+   unpacked extension if needed, and click **Reload**. Do not treat the
+   extension upgrade as complete until the user confirms this manual step.
+8. Restart the daemon and run `opencli doctor`. Require it to report both the
+   candidate daemon version and candidate extension version before executing
+   one low-cost real browser command plus the consuming application's read-only
+   health checks.
 9. Push the candidate branch and open a PR targeting `stable`. Require the
    CLI, extension, and headed-browser checks to pass before merging.
 10. Merge to `stable`, tag the resulting commit, and publish the GitHub release.
