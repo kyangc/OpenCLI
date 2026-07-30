@@ -2,13 +2,13 @@ name: Build Chrome Extension
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "stable" ]
     tags: [ "ext-v*" ]
     paths:
       - 'extension/**'
       - '.github/workflows/build-extension.yml'
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "stable" ]
     paths:
       - 'extension/**'
       - '.github/workflows/build-extension.yml'

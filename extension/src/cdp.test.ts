@@ -476,24 +476,36 @@ describe('cdp network capture correctness', () => {
   });
 
   function createNetworkMock() {
-    const onEventListeners = [];
+    const onEventListeners: Array<(
+      source: chrome.debugger.Debuggee,
+      method: string,
+      params?: object,
+    ) => void | Promise<void>> = [];
     const debuggerApi = {
       attach: vi.fn(async () => {}),
       detach: vi.fn(async () => {}),
-      sendCommand: vi.fn(async (_target, method, params) => {
+      sendCommand: vi.fn(async (
+        _target: chrome.debugger.Debuggee,
+        method: string,
+        params?: Record<string, unknown>,
+      ) => {
         if (method === 'Runtime.evaluate' && params?.expression === '1') return { result: { value: '1' } };
         if (method === 'Network.getRequestPostData') return {}; // no override; use inline postData
         return {};
       }),
       onDetach: { addListener: vi.fn() },
-      onEvent: { addListener: vi.fn((fn) => { onEventListeners.push(fn); }) },
+      onEvent: {
+        addListener: vi.fn((fn: (source: chrome.debugger.Debuggee, method: string, params?: object) => void) => {
+          onEventListeners.push(fn);
+        }),
+      },
     };
     const tabs = {
       get: vi.fn(async () => ({ id: 1, windowId: 1, url: 'https://x.com/home' })),
       onRemoved: { addListener: vi.fn() },
       onUpdated: { addListener: vi.fn() },
     };
-    const fire = async (method, params) => {
+    const fire = async (method: string, params: Record<string, unknown>) => {
       for (const fn of onEventListeners) await fn({ tabId: 1 }, method, params);
     };
     return {
@@ -563,11 +575,19 @@ describe('cdp evaluateInFrame stale context fallback', () => {
   });
 
   it('falls back to the frame target when the cached context id went stale', async () => {
-    const debuggerEventListeners = [];
+    const debuggerEventListeners: Array<(
+      source: chrome.debugger.Debuggee,
+      method: string,
+      params?: object,
+    ) => void> = [];
     const debuggerApi = {
       attach: vi.fn(async () => {}),
       detach: vi.fn(async () => {}),
-      sendCommand: vi.fn(async (target, method, params) => {
+      sendCommand: vi.fn(async (
+        target: chrome.debugger.Debuggee,
+        method: string,
+        params?: Record<string, unknown>,
+      ) => {
         if (method === 'Runtime.enable') return {};
         // The cached context id is stale after the frame navigated: CDP rejects.
         if (method === 'Runtime.evaluate' && params?.contextId === 99) {
@@ -584,7 +604,11 @@ describe('cdp evaluateInFrame stale context fallback', () => {
         return {};
       }),
       onDetach: { addListener: vi.fn() },
-      onEvent: { addListener: vi.fn((fn) => { debuggerEventListeners.push(fn); }) },
+      onEvent: {
+        addListener: vi.fn((fn: (source: chrome.debugger.Debuggee, method: string, params?: object) => void) => {
+          debuggerEventListeners.push(fn);
+        }),
+      },
     };
     const tabs = {
       get: vi.fn(async () => ({ id: 1, windowId: 1, url: 'https://x.com/home' })),

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, stable]
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, stable]
   schedule:
     - cron: '0 8 * * 1'  # Weekly Monday 08:00 UTC — smoke tests
   workflow_dispatch:
