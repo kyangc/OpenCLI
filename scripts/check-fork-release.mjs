@@ -18,6 +18,7 @@ const cliPackage = readJson('package.json');
 const extensionPackage = readJson('extension/package.json');
 const extensionManifest = readJson('extension/manifest.json');
 const release = cliPackage.opencliFork?.release;
+const extensionRelease = extensionPackage.opencliFork?.release;
 
 const releaseMatch = typeof release === 'string'
   ? release.match(/^kyangc-v(\d+\.\d+\.\d+)\.(\d+)$/)
@@ -36,29 +37,35 @@ if (!releaseMatch) {
   }
 
   const extensionMatch = extensionPackage.version?.match(/^(\d+\.\d+\.\d+)-kyangc\.(\d+)$/);
+  const extensionReleaseMatch = typeof extensionRelease === 'string'
+    ? extensionRelease.match(/^kyangc-v(\d+\.\d+\.\d+)\.(\d+)$/)
+    : null;
   if (!extensionMatch) {
     fail('extension package version must match <major.minor.patch>-kyangc.<revision>');
+  } else if (!extensionReleaseMatch) {
+    fail(
+      'extension package opencliFork.release must match kyangc-v<major.minor.patch>.<revision>',
+    );
   } else {
     const [, upstreamExtensionVersion, extensionRevision] = extensionMatch;
-    if (extensionRevision !== revision) {
-      fail(`extension revision ${extensionRevision} must match CLI revision ${revision}`);
+    const [, , extensionReleaseRevision] = extensionReleaseMatch;
+    if (extensionRevision !== extensionReleaseRevision) {
+      fail(
+        `extension revision ${extensionRevision} must match its release revision ${extensionReleaseRevision}`,
+      );
     }
-    const expectedManifestVersion = `${upstreamExtensionVersion}.${revision}`;
+    const expectedManifestVersion = `${upstreamExtensionVersion}.${extensionRevision}`;
     if (extensionManifest.version !== expectedManifestVersion) {
       fail(`extension manifest version ${extensionManifest.version} must be ${expectedManifestVersion}`);
     }
-  }
-
-  if (extensionPackage.opencliFork?.release !== release) {
-    fail('extension package release must match the root package release');
-  }
-  if (extensionManifest.version_name !== release) {
-    fail('extension manifest version_name must match the root package release');
+    if (extensionManifest.version_name !== extensionRelease) {
+      fail('extension manifest version_name must match the extension package release');
+    }
   }
 }
 
 if (process.exitCode) process.exit(process.exitCode);
 
 console.log(
-  `[kyangc-release] ${release}: CLI ${cliPackage.version}, extension ${extensionManifest.version}`,
+  `[kyangc-release] CLI ${release} (${cliPackage.version}), extension ${extensionRelease} (${extensionManifest.version})`,
 );

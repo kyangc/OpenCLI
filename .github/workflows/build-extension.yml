@@ -9,9 +9,6 @@ on:
       - '.github/workflows/build-extension.yml'
   pull_request:
     branches: [ "main", "stable" ]
-    paths:
-      - 'extension/**'
-      - '.github/workflows/build-extension.yml'
 
 permissions:
   contents: write

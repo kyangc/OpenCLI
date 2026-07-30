@@ -85,9 +85,14 @@ class FakeExtension {
     this.ws?.send(JSON.stringify(result));
   }
 
-  close(): void {
-    this.ws?.close();
+  async close(): Promise<void> {
+    const ws = this.ws;
     this.ws = null;
+    if (!ws || ws.readyState === WebSocket.CLOSED) return;
+    await new Promise<void>((resolve) => {
+      ws.once('close', resolve);
+      ws.close();
+    });
   }
 
   terminate(): void {
@@ -190,7 +195,7 @@ describe('daemon transport contracts (real daemon)', () => {
       expect(result.data).toEqual({ echo: 'exec' });
       expect(ext.dispatchCountFor(id)).toBe(1);
     } finally {
-      ext.close();
+      await ext.close();
     }
   });
 
@@ -221,7 +226,7 @@ describe('daemon transport contracts (real daemon)', () => {
       expect(b.result.data).toBe('once');
       expect(ext.dispatchCountFor(id)).toBe(1);
     } finally {
-      ext.close();
+      await ext.close();
     }
   });
 
@@ -243,7 +248,7 @@ describe('daemon transport contracts (real daemon)', () => {
       expect(result.ok).toBe(false);
       expect(result.errorCode).toBe('command_result_unknown');
     } finally {
-      ext.close();
+      await ext.close();
     }
   });
 
@@ -290,7 +295,7 @@ describe('daemon transport contracts (real daemon)', () => {
       expect(required.result.ok).toBe(false);
       expect(required.result.errorCode).toBe('profile_disconnected');
     } finally {
-      ext.close();
+      await ext.close();
     }
   });
 
@@ -318,6 +323,6 @@ describe('daemon transport contracts (real daemon)', () => {
     });
     expect(daemon?.exitCode).toBe(0);
     daemon = null; // afterAll: nothing left to stop
-    ext.close();
+    await ext.close();
   });
 });
