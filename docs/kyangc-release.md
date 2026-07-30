@@ -32,20 +32,91 @@ The release identifier in the root package, extension package, Chrome manifest
 Do not load `extension/` from the Git checkout into Chrome. A fast-forward of
 `main` must not mutate the running extension.
 
+## Upstream sync SOP
+
+Never pull `upstream/main` directly while on `stable`. Mirror upstream into
+`main`, then merge that exact commit into a candidate branch from `stable`.
+
+1. Start from a clean worktree and refresh both remotes:
+
+   ```bash
+   git status --short --branch
+   git fetch --prune upstream
+   git fetch --prune origin
+   ```
+
+2. Fast-forward the fork mirror and verify all three refs agree:
+
+   ```bash
+   git switch main
+   git merge --ff-only upstream/main
+   git push origin main
+   git rev-parse main upstream/main origin/main
+   ```
+
+3. Create the production candidate from the current `stable`, not from
+   `main`, and merge the already-verified upstream ref:
+
+   ```bash
+   git switch stable
+   git pull --ff-only origin stable
+   git switch -c codex/sync-upstream-main-YYYYMMDD
+   git merge --no-ff upstream/main -m "chore: sync upstream main"
+   ```
+
+4. Increment the fork revision consistently in `package.json`,
+   `package-lock.json`, `extension/package.json`,
+   `extension/package-lock.json`, and `extension/manifest.json`. Keep the
+   upstream CLI and extension portions aligned with the merged source, then
+   run `npm run check:fork-release`.
+
+5. Run the promotion gate below, push the candidate branch, and open a PR
+   targeting `stable`. Do not tag or update the local runtime from `main`.
+
+If the upstream merge conflicts with fork release files or runtime behavior,
+resolve and validate it on the candidate branch. Do not force-push `main` or
+rewrite `stable`.
+
 ## Promotion gate
 
 1. Merge or cherry-pick the desired upstream changes into a branch from
    `stable`.
 2. Update the fork release identifiers.
-3. Run `npm ci`, `npm run verify:fork-release`, and both production audits.
-4. Run daemon transport E2E with port 19825 free.
+3. Run the reproducible local checks:
+
+   ```bash
+   npm ci
+   npm ci --prefix extension
+   TZ=Asia/Shanghai npm run verify:fork-release
+   npm audit --omit=dev --audit-level=high
+   npm audit --omit=dev --audit-level=high --prefix extension
+   ```
+
+4. Temporarily disable the unpacked Browser Bridge in
+   `chrome://extensions`, stop the installed daemon, and wait until port
+   19825 is actually released before running the fixed-port contract:
+
+   ```bash
+   opencli daemon stop
+   lsof -nP -iTCP:19825 -sTCP:LISTEN
+   TZ=Asia/Shanghai npx vitest run --project e2e-fixed-port \
+     tests/e2e/daemon-transport.test.ts --reporter=verbose
+   ```
+
+   `opencli daemon stop` can return before the listener disappears. A live
+   unpacked extension also reconnects automatically to any daemon on the fixed
+   port and invalidates the fake-extension isolation, so an empty `lsof`
+   result alone is insufficient unless the real extension is disabled.
+
 5. Build the CLI tarball and immutable unpacked extension artifact.
 6. Install the candidate CLI tarball and deploy the extension artifact to the
    fixed `browser-extension/current` directory.
-7. In `chrome://extensions`, reload the unpacked extension.
+7. In `chrome://extensions`, re-enable and reload the unpacked extension.
 8. Restart the daemon, run `opencli doctor`, and execute one low-cost real
-   browser command.
-9. Merge to `stable`, tag the resulting commit, and publish the GitHub release.
+   browser command plus the consuming application's read-only health checks.
+9. Push the candidate branch and open a PR targeting `stable`. Require the
+   CLI, extension, and headed-browser checks to pass before merging.
+10. Merge to `stable`, tag the resulting commit, and publish the GitHub release.
 
 PRs to `stable` run the CLI, extension, and headed-browser workflows. Tags named
 `kyangc-v*` create a GitHub release containing the CLI tarball, extension ZIP,

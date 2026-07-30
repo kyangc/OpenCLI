@@ -1,9 +1,9 @@
 {
   "name": "@jackwener/opencli",
-  "version": "1.8.6-kyangc.2",
+  "version": "1.8.6-kyangc.3",
   "private": true,
   "opencliFork": {
-    "release": "kyangc-v1.8.6.2",
+    "release": "kyangc-v1.8.6.3",
     "upstreamVersion": "1.8.6"
   },
   "description": "Make any website or Electron App your CLI. AI-powered.",
