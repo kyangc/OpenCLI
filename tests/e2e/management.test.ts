@@ -86,7 +86,7 @@ describe('management commands E2E', () => {
   it('--version shows version number', async () => {
     const { stdout, code } = await runCli(['--version']);
     expect(code).toBe(0);
-    expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
   });
 
   // ── help ──
