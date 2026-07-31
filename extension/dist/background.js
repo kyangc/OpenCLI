@@ -968,6 +968,7 @@ const CONTAINER_TAB_GROUP_TITLE = {
   // creates or discovers a visible tab group.
   automation: "OpenCLI Adapter"
 };
+const AUTOMATION_CONTAINER_ANCHOR_PATH = "popup.html#automation-container";
 const OWNED_TAB_GROUP_COLOR = "orange";
 let leaseMutationQueue = Promise.resolve();
 const ownedContainers = {
@@ -1195,6 +1196,62 @@ function resetWindowIdleTimer(leaseKey, remainingMs) {
 function getOwnedContainerGroupTitles(role) {
   return role === "automation" ? [] : [CONTAINER_TAB_GROUP_TITLE.interactive];
 }
+function getAutomationContainerAnchorUrl() {
+  return chrome.runtime.getURL(AUTOMATION_CONTAINER_ANCHOR_PATH);
+}
+function isAutomationContainerAnchor(tab) {
+  return tab.url === getAutomationContainerAnchorUrl();
+}
+async function findAutomationContainerAnchor(windowId) {
+  try {
+    const tabs = await chrome.tabs.query(windowId === void 0 ? {} : { windowId });
+    return tabs.find((tab) => tab.id !== void 0 && isAutomationContainerAnchor(tab)) ?? null;
+  } catch {
+    return null;
+  }
+}
+async function ensureAutomationContainerAnchor(windowId) {
+  const existing = await findAutomationContainerAnchor(windowId);
+  if (existing?.id !== void 0) return existing.id;
+  try {
+    const anchor = await chrome.tabs.create({
+      windowId,
+      url: getAutomationContainerAnchorUrl(),
+      active: false,
+      pinned: true
+    });
+    return anchor.id;
+  } catch (err) {
+    console.warn(`[opencli] Failed to mark automation window ${windowId}: ${err instanceof Error ? err.message : String(err)}`);
+    return void 0;
+  }
+}
+async function discoverAutomationContainerWindow() {
+  const anchors = (await chrome.tabs.query({})).filter((tab) => tab.id !== void 0 && isAutomationContainerAnchor(tab)).sort((a, b) => a.windowId - b.windowId || (a.id ?? 0) - (b.id ?? 0));
+  for (const anchor of anchors) {
+    try {
+      await chrome.windows.get(anchor.windowId);
+      return anchor.windowId;
+    } catch {
+    }
+  }
+  return null;
+}
+async function cleanupLegacyAdapterGroups() {
+  try {
+    const groups = await chrome.tabGroups.query({
+      title: CONTAINER_TAB_GROUP_TITLE.automation,
+      color: OWNED_TAB_GROUP_COLOR
+    });
+    for (const group of groups) {
+      const tabs = await chrome.tabs.query({ groupId: group.id });
+      const tabIds = tabs.map((tab) => tab.id).filter((id) => id !== void 0);
+      if (tabIds.length > 0) await chrome.tabs.ungroup(tabIds);
+    }
+  } catch (err) {
+    console.warn(`[opencli] Failed to remove legacy adapter tab groups: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 async function focusOwnedWindowIfRequested(windowId, mode) {
   if (mode !== "foreground") return;
   const updateWindow = chrome.windows.update;
@@ -1406,9 +1463,14 @@ async function ensureOwnedContainerWindow(role, initialUrl, mode = "background")
 }
 async function ensureOwnedContainerWindowUnlocked(role, initialUrl, mode = "background") {
   const container = ownedContainers[role];
+  if (role === "automation" && container.windowId === null) {
+    container.windowId = await discoverAutomationContainerWindow();
+    if (container.windowId !== null) await persistRuntimeState();
+  }
   if (container.windowId !== null) {
     try {
       await chrome.windows.get(container.windowId);
+      if (role === "automation") await ensureAutomationContainerAnchor(container.windowId);
       const group2 = await ensureOwnedContainerGroup(role, container.windowId, []);
       if (group2) {
         await focusOwnedWindowIfRequested(group2.windowId, mode);
@@ -1447,7 +1509,12 @@ async function ensureOwnedContainerWindowUnlocked(role, initialUrl, mode = "back
     };
   }
   const startUrl = initialUrl && isSafeNavigationUrl(initialUrl) ? initialUrl : BLANK_PAGE;
-  const win = await chrome.windows.create({
+  const win = await chrome.windows.create(mode === "background" && role === "automation" ? {
+    url: startUrl,
+    focused: false,
+    state: "minimized",
+    type: "normal"
+  } : {
     url: startUrl,
     focused: mode === "foreground",
     width: 1280,
@@ -1477,6 +1544,7 @@ async function ensureOwnedContainerWindowUnlocked(role, initialUrl, mode = "back
       }
     });
   }
+  if (role === "automation") await ensureAutomationContainerAnchor(container.windowId);
   const group = await ensureOwnedContainerGroup(role, container.windowId, [initialTabId]);
   await persistRuntimeState();
   return { windowId: group?.windowId ?? container.windowId, initialTabId };
@@ -2325,6 +2393,10 @@ async function releaseLease(leaseKey, reason = "released") {
         await chrome.tabs.remove(tabId).catch(() => {
         });
         console.log(`[opencli] Released owned tab lease ${tabId} (session=${session.session}, surface=${session.surface}, ${reason})`);
+      } else if (getOwnedWindowRole(leaseKey) === "automation" && await ensureAutomationContainerAnchor(session.windowId) !== void 0) {
+        await chrome.tabs.remove(tabId).catch(() => {
+        });
+        console.log(`[opencli] Released owned adapter tab lease ${tabId}; marker window remains reusable (session=${session.session}, ${reason})`);
       } else {
         try {
           const tab = await chrome.tabs.update(tabId, { url: BLANK_PAGE, active: true });
@@ -2364,6 +2436,12 @@ async function reconcileTargetLeaseRegistry() {
     }
   }
   automationSessions.clear();
+  if (ownedContainers.automation.windowId === null) {
+    ownedContainers.automation.windowId = await discoverAutomationContainerWindow();
+  }
+  if (ownedContainers.automation.windowId !== null) {
+    await ensureAutomationContainerAnchor(ownedContainers.automation.windowId);
+  }
   for (const [leaseKey, stored] of Object.entries(registry.leases)) {
     const tabId = stored.preferredTabId;
     if (tabId === null) continue;
@@ -2412,6 +2490,7 @@ async function reconcileTargetLeaseRegistry() {
   } catch (err) {
     console.warn(`[opencli] Startup interactive group convergence failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+  await cleanupLegacyAdapterGroups();
   await persistRuntimeState();
 }
 async function handleBind(cmd, leaseKey) {

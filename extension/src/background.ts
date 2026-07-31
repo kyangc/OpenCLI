@@ -306,6 +306,7 @@ const CONTAINER_TAB_GROUP_TITLE: Record<OwnedWindowRole, string> = {
   // creates or discovers a visible tab group.
   automation: 'OpenCLI Adapter',
 };
+const AUTOMATION_CONTAINER_ANCHOR_PATH = 'popup.html#automation-container';
 const OWNED_TAB_GROUP_COLOR: chrome.tabGroups.ColorEnum = 'orange';
 let leaseMutationQueue: Promise<void> = Promise.resolve();
 const ownedContainers: Record<OwnedWindowRole, {
@@ -630,6 +631,73 @@ function getOwnedContainerGroupTitles(role: OwnedWindowRole): string[] {
   return role === 'automation' ? [] : [CONTAINER_TAB_GROUP_TITLE.interactive];
 }
 
+function getAutomationContainerAnchorUrl(): string {
+  return chrome.runtime.getURL(AUTOMATION_CONTAINER_ANCHOR_PATH);
+}
+
+function isAutomationContainerAnchor(tab: chrome.tabs.Tab): boolean {
+  return tab.url === getAutomationContainerAnchorUrl();
+}
+
+async function findAutomationContainerAnchor(windowId?: number): Promise<chrome.tabs.Tab | null> {
+  try {
+    const tabs = await chrome.tabs.query(windowId === undefined ? {} : { windowId });
+    return tabs.find((tab) => tab.id !== undefined && isAutomationContainerAnchor(tab)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function ensureAutomationContainerAnchor(windowId: number): Promise<number | undefined> {
+  const existing = await findAutomationContainerAnchor(windowId);
+  if (existing?.id !== undefined) return existing.id;
+  try {
+    const anchor = await chrome.tabs.create({
+      windowId,
+      url: getAutomationContainerAnchorUrl(),
+      active: false,
+      pinned: true,
+    });
+    return anchor.id;
+  } catch (err) {
+    console.warn(`[opencli] Failed to mark automation window ${windowId}: ${err instanceof Error ? err.message : String(err)}`);
+    return undefined;
+  }
+}
+
+async function discoverAutomationContainerWindow(): Promise<number | null> {
+  const anchors = (await chrome.tabs.query({}))
+    .filter((tab) => tab.id !== undefined && isAutomationContainerAnchor(tab))
+    .sort((a, b) => a.windowId - b.windowId || (a.id ?? 0) - (b.id ?? 0));
+
+  for (const anchor of anchors) {
+    try {
+      await chrome.windows.get(anchor.windowId);
+      return anchor.windowId;
+    } catch {
+      // Ignore a marker whose window disappeared between the tab query and get.
+    }
+  }
+  return null;
+}
+
+async function cleanupLegacyAdapterGroups(): Promise<void> {
+  try {
+    const groups = await chrome.tabGroups.query({
+      title: CONTAINER_TAB_GROUP_TITLE.automation,
+      color: OWNED_TAB_GROUP_COLOR,
+    });
+    for (const group of groups) {
+      const tabs = await chrome.tabs.query({ groupId: group.id });
+      const tabIds = tabs.map((tab) => tab.id).filter((id): id is number => id !== undefined);
+      if (tabIds.length > 0) await chrome.tabs.ungroup(tabIds);
+    }
+  } catch (err) {
+    // Migration cleanup is best-effort and must not block command execution.
+    console.warn(`[opencli] Failed to remove legacy adapter tab groups: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 type OwnedContainerGroup = {
   id: number;
   windowId: number;
@@ -949,9 +1017,14 @@ async function ensureOwnedContainerWindowUnlocked(
   mode: WindowMode = 'background',
 ): Promise<{ windowId: number; initialTabId?: number }> {
   const container = ownedContainers[role];
+  if (role === 'automation' && container.windowId === null) {
+    container.windowId = await discoverAutomationContainerWindow();
+    if (container.windowId !== null) await persistRuntimeState();
+  }
   if (container.windowId !== null) {
     try {
       await chrome.windows.get(container.windowId);
+      if (role === 'automation') await ensureAutomationContainerAnchor(container.windowId);
       const group = await ensureOwnedContainerGroup(role, container.windowId, []);
       if (group) {
         await focusOwnedWindowIfRequested(group.windowId, mode);
@@ -993,15 +1066,23 @@ async function ensureOwnedContainerWindowUnlocked(
 
   const startUrl = (initialUrl && isSafeNavigationUrl(initialUrl)) ? initialUrl : BLANK_PAGE;
 
-  // Note: Do NOT set `state` parameter here. Chrome 146+ rejects 'normal' as an invalid
-  // state value for windows.create(). The window defaults to 'normal' state anyway.
-  const win = await chrome.windows.create({
-    url: startUrl,
-    focused: mode === 'foreground',
-    width: 1280,
-    height: 900,
-    type: 'normal',
-  });
+  // Background adapter work should not surface a full-sized window. Chrome
+  // disallows combining a minimized state with explicit dimensions, so only
+  // foreground windows receive width/height.
+  const win = await chrome.windows.create(mode === 'background' && role === 'automation'
+    ? {
+        url: startUrl,
+        focused: false,
+        state: 'minimized',
+        type: 'normal',
+      }
+    : {
+        url: startUrl,
+        focused: mode === 'foreground',
+        width: 1280,
+        height: 900,
+        type: 'normal',
+      });
   container.windowId = win.id!;
   // Persist windowId before any further awaits so a worker crash between
   // `windows.create` returning and the subsequent `tabs.group` call still
@@ -1032,6 +1113,7 @@ async function ensureOwnedContainerWindowUnlocked(
       }
     });
   }
+  if (role === 'automation') await ensureAutomationContainerAnchor(container.windowId);
   const group = await ensureOwnedContainerGroup(role, container.windowId, [initialTabId]);
   await persistRuntimeState();
   return { windowId: group?.windowId ?? container.windowId, initialTabId };
@@ -2093,6 +2175,10 @@ async function releaseLease(leaseKey: string, reason: string = 'released'): Prom
       if (hasOtherOwnedLease) {
         await chrome.tabs.remove(tabId).catch(() => {});
         console.log(`[opencli] Released owned tab lease ${tabId} (session=${session.session}, surface=${session.surface}, ${reason})`);
+      } else if (getOwnedWindowRole(leaseKey) === 'automation'
+        && await ensureAutomationContainerAnchor(session.windowId) !== undefined) {
+        await chrome.tabs.remove(tabId).catch(() => {});
+        console.log(`[opencli] Released owned adapter tab lease ${tabId}; marker window remains reusable (session=${session.session}, ${reason})`);
       } else {
         try {
           const tab = await chrome.tabs.update(tabId, { url: BLANK_PAGE, active: true });
@@ -2140,6 +2226,14 @@ async function reconcileTargetLeaseRegistry(): Promise<void> {
   }
 
   automationSessions.clear();
+
+  if (ownedContainers.automation.windowId === null) {
+    ownedContainers.automation.windowId = await discoverAutomationContainerWindow();
+  }
+  if (ownedContainers.automation.windowId !== null) {
+    await ensureAutomationContainerAnchor(ownedContainers.automation.windowId);
+  }
+
   for (const [leaseKey, stored] of Object.entries(registry.leases)) {
     const tabId = stored.preferredTabId;
     if (tabId === null) continue;
@@ -2199,6 +2293,7 @@ async function reconcileTargetLeaseRegistry(): Promise<void> {
     console.warn(`[opencli] Startup interactive group convergence failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  await cleanupLegacyAdapterGroups();
   await persistRuntimeState();
 }
 
