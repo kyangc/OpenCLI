@@ -92,7 +92,7 @@
     "js-yaml": "^4.3.1",
     "turndown": "^7.2.2",
     "turndown-plugin-gfm": "^1.0.2",
-    "undici": "^6.27.0",
+    "undici": "^6.28.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
@@ -108,9 +108,10 @@
     "vitest": "^4.1.0"
   },
   "overrides": {
-    "postcss": "^8.5.10",
+    "postcss": "^8.5.23",
+    "vite": "8.0.16",
     "vitepress": {
-      "vite": "6.4.2"
+      "vite": "6.4.3"
     }
   }
 }
