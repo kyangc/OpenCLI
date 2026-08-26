@@ -370,6 +370,23 @@ function buildApplySearchFiltersJs(requestedFilters) {
         };
         const visibleMatches = (root, selector) =>
           Array.from(root.querySelectorAll(selector)).filter(visible);
+        const actionable = (element) => {
+          if (!visible(element) || element.closest('[aria-hidden="true"], [inert]')) return false;
+          const style = getComputedStyle(element);
+          if (parseFloat(style.opacity || '1') <= 0 || style.pointerEvents === 'none') return false;
+          if (typeof element.checkVisibility === 'function' &&
+              !element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+          if (typeof document.elementFromPoint !== 'function') return true;
+          const rect = element.getBoundingClientRect();
+          const x = rect.left + rect.width / 2;
+          const y = rect.top + rect.height / 2;
+          if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return false;
+          const topElement = document.elementFromPoint(x, y);
+          return Boolean(topElement &&
+            (topElement === element || element.contains(topElement) || topElement.contains(element)));
+        };
+        const actionableMatches = (root, selector) =>
+          Array.from(root.querySelectorAll(selector)).filter(actionable);
         const authBlocked = () => /登录后查看搜索结果/.test(document.body?.innerText || '') ||
           visible(document.querySelector('#login-btn'));
         const locationBlocked = () => /请开启浏览器地理位置权限/.test(document.body?.innerText || '');
@@ -402,7 +419,7 @@ function buildApplySearchFiltersJs(requestedFilters) {
           if (groups.length !== 1) {
             return { status: 'layout', detail: groups.length ? 'ambiguous_group' : 'group_not_found' };
           }
-          const options = visibleMatches(groups[0], '.tag-container > .tags')
+          const options = actionableMatches(groups[0], '.tag-container > .tags')
             .filter((option) => text(option) === request.option);
           if (options.length !== 1) {
             return { status: 'layout', detail: options.length ? 'ambiguous_option' : 'option_not_found' };

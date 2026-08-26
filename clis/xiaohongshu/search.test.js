@@ -104,6 +104,7 @@ function createFilterBehaviorPage(options = {}) {
     const state = Object.fromEntries(FILTER_FIXTURE.map(([group, choices]) => [group, choices[0]]));
     Object.assign(state, options.initial || {});
     const clicks = [];
+    const hitTargets = [];
     let panelRenders = 0;
     let geometry = 1000;
     const trigger = document.querySelector('.filter');
@@ -119,6 +120,8 @@ function createFilterBehaviorPage(options = {}) {
         get: () => options.unstableGeometry ? geometry++ : geometry,
     });
     Object.defineProperty(feeds, 'clientHeight', { configurable: true, value: 640 });
+    document.elementFromPoint = (x, y) => hitTargets.find(({ rect }) =>
+        x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom)?.element || null;
 
     const renderResults = (empty = false) => {
         main.innerHTML = empty
@@ -133,9 +136,10 @@ function createFilterBehaviorPage(options = {}) {
 
     const renderPanel = () => {
         document.querySelector('.filter-panel')?.remove();
+        hitTargets.length = 0;
         const panel = document.createElement('div');
         panel.className = 'filter-panel';
-        for (const [groupLabel, choices] of FILTER_FIXTURE) {
+        for (const [groupIndex, [groupLabel, choices]] of FILTER_FIXTURE.entries()) {
             const group = document.createElement('div');
             group.className = 'filters';
             const label = document.createElement('span');
@@ -143,9 +147,10 @@ function createFilterBehaviorPage(options = {}) {
             group.append(label);
             const container = document.createElement('div');
             container.className = 'tag-container';
-            for (const choice of choices) {
+            for (const [choiceIndex, choice] of choices.entries()) {
                 if (options.missing === `${groupLabel}/${choice}`) continue;
-                const copies = options.ambiguous === `${groupLabel}/${choice}` ? 2 : 1;
+                const copies = options.ambiguous === `${groupLabel}/${choice}` ||
+                    options.occludedDuplicate === `${groupLabel}/${choice}` ? 2 : 1;
                 for (let copy = 0; copy < copies; copy++) {
                     const option = document.createElement('div');
                     option.className = `tags${state[groupLabel] === choice ? ' active' : ''}`;
@@ -173,7 +178,12 @@ function createFilterBehaviorPage(options = {}) {
                         }, 300);
                     });
                     container.append(option);
-                    markVisible(option);
+                    const left = choiceIndex * 110 +
+                        (copy === 1 && options.ambiguous === `${groupLabel}/${choice}` ? 550 : 0);
+                    const top = groupIndex * 60;
+                    const rect = { width: 96, height: 40, top, left, right: left + 96, bottom: top + 40 };
+                    option.getBoundingClientRect = () => rect;
+                    hitTargets.push({ element: option, rect });
                     markVisible(optionLabel);
                 }
             }
@@ -696,6 +706,23 @@ describe('xiaohongshu search filter behavior', () => {
                 '发布时间': '一天内',
                 '搜索范围': '已关注',
             });
+        }
+        finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('ignores an occluded duplicate of an already-active option', async () => {
+        vi.useFakeTimers();
+        try {
+            const page = createFilterBehaviorPage({ occludedDuplicate: '排序依据/综合' });
+
+            const result = await runFilterCommand(page, {});
+
+            expect(result[0].title).toBe('综合');
+            expect(page.filterClicks).toEqual([]);
+            expect(page.goto).toHaveBeenCalledTimes(1);
+            expect(page.newTab).not.toHaveBeenCalled();
         }
         finally {
             vi.useRealTimers();
