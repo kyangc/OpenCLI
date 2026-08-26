@@ -9108,7 +9108,7 @@
     "description": "搜索携程一程机票（按出发/到达 IATA 三字码 + 日期）",
     "access": "read",
     "domain": "flights.ctrip.com",
-    "strategy": "cookie",
+    "strategy": "intercept",
     "browser": true,
     "args": [
       {
@@ -15125,6 +15125,596 @@
     "type": "js",
     "modulePath": "github-trending/repos.js",
     "sourceFile": "github-trending/repos.js"
+  },
+  {
+    "site": "gmail",
+    "name": "attachments",
+    "description": "List attachment metadata for a Gmail thread",
+    "access": "read",
+    "domain": "mail.google.com",
+    "strategy": "intercept",
+    "browser": true,
+    "args": [
+      {
+        "name": "thread",
+        "type": "string",
+        "required": true,
+        "positional": true,
+        "help": "Thread id from gmail search, legacy id, or Gmail thread URL"
+      },
+      {
+        "name": "account",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Gmail account index from the /mail/u/<index>/ URL"
+      }
+    ],
+    "columns": [
+      "messageId",
+      "attachmentId",
+      "name",
+      "mimeType",
+      "size"
+    ],
+    "type": "js",
+    "modulePath": "gmail/attachments.js",
+    "sourceFile": "gmail/attachments.js",
+    "navigateBefore": false,
+    "siteSession": "persistent"
+  },
+  {
+    "site": "gmail",
+    "name": "drafts",
+    "description": "List Gmail draft threads",
+    "access": "read",
+    "domain": "mail.google.com",
+    "strategy": "intercept",
+    "browser": true,
+    "args": [
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Maximum threads to return (1-200)"
+      },
+      {
+        "name": "account",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Gmail account index from the /mail/u/<index>/ URL"
+      }
+    ],
+    "columns": [
+      "threadId",
+      "subject",
+      "from",
+      "fromName",
+      "snippet",
+      "messageCount",
+      "unread",
+      "starred",
+      "date",
+      "labels"
+    ],
+    "type": "js",
+    "modulePath": "gmail/search.js",
+    "sourceFile": "gmail/search.js",
+    "navigateBefore": false,
+    "siteSession": "persistent"
+  },
+  {
+    "site": "gmail",
+    "name": "important",
+    "description": "List important Gmail threads",
+    "access": "read",
+    "domain": "mail.google.com",
+    "strategy": "intercept",
+    "browser": true,
+    "args": [
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Maximum threads to return (1-200)"
+      },
+      {
+        "name": "account",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Gmail account index from the /mail/u/<index>/ URL"
+      }
+    ],
+    "columns": [
+      "threadId",
+      "subject",
+      "from",
+      "fromName",
+      "snippet",
+      "messageCount",
+      "unread",
+      "starred",
+      "date",
+      "labels"
+    ],
+    "type": "js",
+    "modulePath": "gmail/search.js",
+    "sourceFile": "gmail/search.js",
+    "navigateBefore": false,
+    "siteSession": "persistent"
+  },
+  {
+    "site": "gmail",
+    "name": "inbox",
+    "description": "List Gmail inbox threads",
+    "access": "read",
+    "domain": "mail.google.com",
+    "strategy": "intercept",
+    "browser": true,
+    "args": [
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Maximum threads to return (1-200)"
+      },
+      {
+        "name": "account",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Gmail account index from the /mail/u/<index>/ URL"
+      }
+    ],
+    "columns": [
+      "threadId",
+      "subject",
+      "from",
+      "fromName",
+      "snippet",
+      "messageCount",
+      "unread",
+      "starred",
+      "date",
+      "labels"
+    ],
+    "type": "js",
+    "modulePath": "gmail/search.js",
+    "sourceFile": "gmail/search.js",
+    "navigateBefore": false,
+    "siteSession": "persistent"
+  },
+  {
+    "site": "gmail",
+    "name": "labels",
+    "description": "List Gmail system and user labels with counts",
+    "access": "read",
+    "domain": "mail.google.com",
+    "strategy": "intercept",
+    "browser": true,
+    "args": [
+      {
+        "name": "account",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Gmail account index from the /mail/u/<index>/ URL"
+      }
+    ],
+    "columns": [
+      "id",
+      "name",
+      "type",
+      "unreadCount",
+      "totalCount"
+    ],
+    "type": "js",
+    "modulePath": "gmail/labels.js",
+    "sourceFile": "gmail/labels.js",
+    "navigateBefore": false,
+    "siteSession": "persistent"
+  },
+  {
+    "site": "gmail",
+    "name": "login",
+    "description": "Open gmail login and wait until the browser session is authenticated",
+    "access": "write",
+    "domain": "mail.google.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "timeout",
+        "type": "int",
+        "default": 300,
+        "required": false,
+        "help": "Maximum seconds to wait for the user to finish login"
+      }
+    ],
+    "columns": [
+      "status",
+      "logged_in",
+      "site",
+      "email",
+      "name"
+    ],
+    "type": "js",
+    "modulePath": "gmail/auth.js",
+    "sourceFile": "gmail/auth.js",
+    "navigateBefore": false,
+    "siteSession": "persistent",
+    "defaultWindowMode": "foreground"
+  },
+  {
+    "site": "gmail",
+    "name": "search",
+    "description": "Search Gmail using Gmail search syntax",
+    "access": "read",
+    "domain": "mail.google.com",
+    "strategy": "intercept",
+    "browser": true,
+    "args": [
+      {
+        "name": "query",
+        "type": "string",
+        "required": true,
+        "positional": true,
+        "help": "Gmail search query"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Maximum threads to return (1-200)"
+      },
+      {
+        "name": "account",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Gmail account index from the /mail/u/<index>/ URL"
+      }
+    ],
+    "columns": [
+      "threadId",
+      "subject",
+      "from",
+      "fromName",
+      "snippet",
+      "messageCount",
+      "unread",
+      "starred",
+      "date",
+      "labels"
+    ],
+    "type": "js",
+    "modulePath": "gmail/search.js",
+    "sourceFile": "gmail/search.js",
+    "navigateBefore": false,
+    "siteSession": "persistent"
+  },
+  {
+    "site": "gmail",
+    "name": "sent",
+    "description": "List sent Gmail threads",
+    "access": "read",
+    "domain": "mail.google.com",
+    "strategy": "intercept",
+    "browser": true,
+    "args": [
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Maximum threads to return (1-200)"
+      },
+      {
+        "name": "account",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Gmail account index from the /mail/u/<index>/ URL"
+      }
+    ],
+    "columns": [
+      "threadId",
+      "subject",
+      "from",
+      "fromName",
+      "snippet",
+      "messageCount",
+      "unread",
+      "starred",
+      "date",
+      "labels"
+    ],
+    "type": "js",
+    "modulePath": "gmail/search.js",
+    "sourceFile": "gmail/search.js",
+    "navigateBefore": false,
+    "siteSession": "persistent"
+  },
+  {
+    "site": "gmail",
+    "name": "snoozed",
+    "description": "List snoozed Gmail threads",
+    "access": "read",
+    "domain": "mail.google.com",
+    "strategy": "intercept",
+    "browser": true,
+    "args": [
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Maximum threads to return (1-200)"
+      },
+      {
+        "name": "account",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Gmail account index from the /mail/u/<index>/ URL"
+      }
+    ],
+    "columns": [
+      "threadId",
+      "subject",
+      "from",
+      "fromName",
+      "snippet",
+      "messageCount",
+      "unread",
+      "starred",
+      "date",
+      "labels"
+    ],
+    "type": "js",
+    "modulePath": "gmail/search.js",
+    "sourceFile": "gmail/search.js",
+    "navigateBefore": false,
+    "siteSession": "persistent"
+  },
+  {
+    "site": "gmail",
+    "name": "spam",
+    "description": "List Gmail spam threads",
+    "access": "read",
+    "domain": "mail.google.com",
+    "strategy": "intercept",
+    "browser": true,
+    "args": [
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Maximum threads to return (1-200)"
+      },
+      {
+        "name": "account",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Gmail account index from the /mail/u/<index>/ URL"
+      }
+    ],
+    "columns": [
+      "threadId",
+      "subject",
+      "from",
+      "fromName",
+      "snippet",
+      "messageCount",
+      "unread",
+      "starred",
+      "date",
+      "labels"
+    ],
+    "type": "js",
+    "modulePath": "gmail/search.js",
+    "sourceFile": "gmail/search.js",
+    "navigateBefore": false,
+    "siteSession": "persistent"
+  },
+  {
+    "site": "gmail",
+    "name": "starred",
+    "description": "List starred Gmail threads",
+    "access": "read",
+    "domain": "mail.google.com",
+    "strategy": "intercept",
+    "browser": true,
+    "args": [
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Maximum threads to return (1-200)"
+      },
+      {
+        "name": "account",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Gmail account index from the /mail/u/<index>/ URL"
+      }
+    ],
+    "columns": [
+      "threadId",
+      "subject",
+      "from",
+      "fromName",
+      "snippet",
+      "messageCount",
+      "unread",
+      "starred",
+      "date",
+      "labels"
+    ],
+    "type": "js",
+    "modulePath": "gmail/search.js",
+    "sourceFile": "gmail/search.js",
+    "navigateBefore": false,
+    "siteSession": "persistent"
+  },
+  {
+    "site": "gmail",
+    "name": "thread",
+    "description": "Read every message in a Gmail thread",
+    "access": "read",
+    "domain": "mail.google.com",
+    "strategy": "intercept",
+    "browser": true,
+    "args": [
+      {
+        "name": "thread",
+        "type": "string",
+        "required": true,
+        "positional": true,
+        "help": "Thread id from gmail search, legacy id, or Gmail thread URL"
+      },
+      {
+        "name": "account",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Gmail account index from the /mail/u/<index>/ URL"
+      }
+    ],
+    "columns": [
+      "messageId",
+      "legacyMessageId",
+      "threadId",
+      "subject",
+      "from",
+      "fromName",
+      "to",
+      "cc",
+      "date",
+      "snippet",
+      "body",
+      "attachments"
+    ],
+    "type": "js",
+    "modulePath": "gmail/thread.js",
+    "sourceFile": "gmail/thread.js",
+    "navigateBefore": false,
+    "siteSession": "persistent"
+  },
+  {
+    "site": "gmail",
+    "name": "trash",
+    "description": "List Gmail trash threads",
+    "access": "read",
+    "domain": "mail.google.com",
+    "strategy": "intercept",
+    "browser": true,
+    "args": [
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Maximum threads to return (1-200)"
+      },
+      {
+        "name": "account",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Gmail account index from the /mail/u/<index>/ URL"
+      }
+    ],
+    "columns": [
+      "threadId",
+      "subject",
+      "from",
+      "fromName",
+      "snippet",
+      "messageCount",
+      "unread",
+      "starred",
+      "date",
+      "labels"
+    ],
+    "type": "js",
+    "modulePath": "gmail/search.js",
+    "sourceFile": "gmail/search.js",
+    "navigateBefore": false,
+    "siteSession": "persistent"
+  },
+  {
+    "site": "gmail",
+    "name": "unread",
+    "description": "List unread Gmail threads",
+    "access": "read",
+    "domain": "mail.google.com",
+    "strategy": "intercept",
+    "browser": true,
+    "args": [
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Maximum threads to return (1-200)"
+      },
+      {
+        "name": "account",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Gmail account index from the /mail/u/<index>/ URL"
+      }
+    ],
+    "columns": [
+      "threadId",
+      "subject",
+      "from",
+      "fromName",
+      "snippet",
+      "messageCount",
+      "unread",
+      "starred",
+      "date",
+      "labels"
+    ],
+    "type": "js",
+    "modulePath": "gmail/search.js",
+    "sourceFile": "gmail/search.js",
+    "navigateBefore": false,
+    "siteSession": "persistent"
+  },
+  {
+    "site": "gmail",
+    "name": "whoami",
+    "description": "Show the current logged-in gmail account",
+    "access": "read",
+    "domain": "mail.google.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [],
+    "columns": [
+      "logged_in",
+      "site",
+      "email",
+      "name"
+    ],
+    "type": "js",
+    "modulePath": "gmail/auth.js",
+    "sourceFile": "gmail/auth.js",
+    "navigateBefore": false,
+    "siteSession": "persistent"
   },
   {
     "site": "google",
@@ -23207,10 +23797,10 @@
   {
     "site": "linkedin",
     "name": "thread-snapshot",
-    "description": "Load a LinkedIn messaging thread, scroll for available history, and return a full context snapshot",
+    "description": "Load a LinkedIn messaging thread and return a structured conversation snapshot",
     "access": "read",
     "domain": "www.linkedin.com",
-    "strategy": "ui",
+    "strategy": "cookie",
     "browser": true,
     "args": [
       {
@@ -23224,7 +23814,7 @@
         "type": "number",
         "default": 30,
         "required": false,
-        "help": "Maximum upward scroll attempts to load older messages"
+        "help": "Maximum upward scroll attempts used to request older message pages"
       },
       {
         "name": "json",
@@ -23244,7 +23834,7 @@
     "type": "js",
     "modulePath": "linkedin/thread-snapshot.js",
     "sourceFile": "linkedin/thread-snapshot.js",
-    "navigateBefore": true
+    "navigateBefore": "https://www.linkedin.com"
   },
   {
     "site": "linkedin",
@@ -26539,7 +27129,7 @@
   {
     "site": "nowcoder",
     "name": "detail",
-    "description": "Post detail view (supports ID / UUID / URL)",
+    "description": "Content or moment detail (use an ID or URL returned by search/experience)",
     "access": "read",
     "domain": "www.nowcoder.com",
     "strategy": "cookie",
@@ -26550,12 +27140,19 @@
         "type": "str",
         "required": true,
         "positional": true,
-        "help": "Post ID, UUID, or URL"
+        "help": "Numeric content ID, moment UUID, or canonical URL"
       }
     ],
     "columns": [
+      "post_type",
+      "id",
+      "uuid",
+      "entity_id",
+      "url",
       "title",
       "author",
+      "author_id",
+      "author_url",
       "school",
       "content",
       "likes",
@@ -26567,12 +27164,12 @@
     "type": "js",
     "modulePath": "nowcoder/detail.js",
     "sourceFile": "nowcoder/detail.js",
-    "navigateBefore": "https://www.nowcoder.com"
+    "navigateBefore": false
   },
   {
     "site": "nowcoder",
     "name": "experience",
-    "description": "Interview experience posts",
+    "description": "Interview experience content and moment posts",
     "access": "read",
     "domain": "www.nowcoder.com",
     "strategy": "cookie",
@@ -26583,30 +27180,38 @@
         "type": "int",
         "default": 1,
         "required": false,
-        "help": "Page number"
+        "help": "Page number (1-1000)"
       },
       {
         "name": "limit",
         "type": "int",
         "default": 15,
         "required": false,
-        "help": "Number of items"
+        "help": "Number of posts (1-50)"
       }
     ],
     "columns": [
       "rank",
+      "post_type",
+      "id",
+      "uuid",
+      "entity_id",
+      "url",
       "title",
       "author",
+      "author_id",
+      "author_url",
       "school",
+      "content",
       "likes",
       "comments",
       "views",
-      "id"
+      "time"
     ],
     "type": "js",
     "modulePath": "nowcoder/experience.js",
     "sourceFile": "nowcoder/experience.js",
-    "navigateBefore": "https://www.nowcoder.com"
+    "navigateBefore": false
   },
   {
     "site": "nowcoder",
@@ -26897,7 +27502,7 @@
   {
     "site": "nowcoder",
     "name": "search",
-    "description": "Full-text search",
+    "description": "Search content and moment posts",
     "access": "read",
     "domain": "www.nowcoder.com",
     "strategy": "cookie",
@@ -26913,30 +27518,40 @@
       {
         "name": "type",
         "type": "str",
-        "default": "all",
+        "default": "post",
         "required": false,
-        "help": "Search type (all/post/question/user/job)"
+        "help": "Post search scope (post/all)"
       },
       {
         "name": "limit",
         "type": "int",
         "default": 10,
         "required": false,
-        "help": "Number of results"
+        "help": "Number of posts (1-50)"
       }
     ],
     "columns": [
       "rank",
+      "post_type",
+      "id",
+      "uuid",
+      "entity_id",
+      "url",
       "title",
       "author",
+      "author_id",
+      "author_url",
       "school",
       "content",
-      "id"
+      "likes",
+      "comments",
+      "views",
+      "time"
     ],
     "type": "js",
     "modulePath": "nowcoder/search.js",
     "sourceFile": "nowcoder/search.js",
-    "navigateBefore": "https://www.nowcoder.com"
+    "navigateBefore": false
   },
   {
     "site": "nowcoder",
@@ -29115,6 +29730,137 @@
   },
   {
     "site": "pixiv",
+    "name": "bookmark-download",
+    "description": "Batch download current Pixiv account bookmarks for illustrations or novels",
+    "access": "read",
+    "domain": "www.pixiv.net",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "type",
+        "type": "str",
+        "default": "illust",
+        "required": false,
+        "help": "Bookmark type: illust or novel"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Number of bookmarks to download"
+      },
+      {
+        "name": "offset",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Pagination offset"
+      },
+      {
+        "name": "visibility",
+        "type": "str",
+        "default": "show",
+        "required": false,
+        "help": "Bookmark visibility: show(public) or hide(private)"
+      },
+      {
+        "name": "output",
+        "type": "str",
+        "default": "./pixiv-downloads/bookmarks",
+        "required": false,
+        "help": "Output directory"
+      },
+      {
+        "name": "file-format",
+        "type": "str",
+        "default": "txt",
+        "required": false,
+        "help": "Novel output file format: txt or md"
+      },
+      {
+        "name": "execute",
+        "type": "boolean",
+        "default": false,
+        "required": false,
+        "help": "Actually write the local archive"
+      }
+    ],
+    "columns": [
+      "rank",
+      "type",
+      "id",
+      "title",
+      "download_status",
+      "path"
+    ],
+    "type": "js",
+    "modulePath": "pixiv/bookmark-download.js",
+    "sourceFile": "pixiv/bookmark-download.js",
+    "navigateBefore": "https://www.pixiv.net"
+  },
+  {
+    "site": "pixiv",
+    "name": "bookmarks",
+    "description": "List the current Pixiv account bookmarks for illustrations or novels",
+    "access": "read",
+    "domain": "www.pixiv.net",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "type",
+        "type": "str",
+        "default": "illust",
+        "required": false,
+        "help": "Bookmark type: illust or novel"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Number of bookmarks to list"
+      },
+      {
+        "name": "offset",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Pagination offset"
+      },
+      {
+        "name": "visibility",
+        "type": "str",
+        "default": "show",
+        "required": false,
+        "help": "Bookmark visibility: show(public) or hide(private)"
+      }
+    ],
+    "columns": [
+      "rank",
+      "type",
+      "bookmark_owner_id",
+      "title",
+      "author",
+      "user_id",
+      "illust_id",
+      "novel_id",
+      "pages",
+      "words",
+      "bookmarks",
+      "tags",
+      "created",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "pixiv/bookmarks.js",
+    "sourceFile": "pixiv/bookmarks.js",
+    "navigateBefore": "https://www.pixiv.net"
+  },
+  {
+    "site": "pixiv",
     "name": "detail",
     "description": "View illustration details (tags, stats, URLs)",
     "access": "read",
@@ -29252,6 +29998,156 @@
     "navigateBefore": false,
     "siteSession": "persistent",
     "defaultWindowMode": "foreground"
+  },
+  {
+    "site": "pixiv",
+    "name": "me",
+    "description": "Show the currently logged-in Pixiv account",
+    "access": "read",
+    "domain": "www.pixiv.net",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [],
+    "columns": [
+      "user_id",
+      "name",
+      "premium",
+      "profile_image",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "pixiv/me.js",
+    "sourceFile": "pixiv/me.js",
+    "navigateBefore": "https://www.pixiv.net"
+  },
+  {
+    "site": "pixiv",
+    "name": "novel",
+    "description": "View Pixiv novel metadata (title, author, series, tags, stats)",
+    "access": "read",
+    "domain": "www.pixiv.net",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "id",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Novel ID"
+      }
+    ],
+    "columns": [
+      "novel_id",
+      "title",
+      "author",
+      "user_id",
+      "series_id",
+      "series_title",
+      "series_order",
+      "words",
+      "characters",
+      "bookmarks",
+      "likes",
+      "views",
+      "tags",
+      "created",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "pixiv/novel.js",
+    "sourceFile": "pixiv/novel.js",
+    "navigateBefore": "https://www.pixiv.net"
+  },
+  {
+    "site": "pixiv",
+    "name": "novel-download",
+    "description": "Download Pixiv novel text as txt or markdown",
+    "access": "read",
+    "domain": "www.pixiv.net",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "novel-id",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Novel ID"
+      },
+      {
+        "name": "output",
+        "type": "str",
+        "default": "./pixiv-downloads/novels",
+        "required": false,
+        "help": "Output directory"
+      },
+      {
+        "name": "file-format",
+        "type": "str",
+        "default": "txt",
+        "required": false,
+        "help": "Output file format: txt or md"
+      },
+      {
+        "name": "execute",
+        "type": "boolean",
+        "default": false,
+        "required": false,
+        "help": "Actually write the local novel file"
+      }
+    ],
+    "columns": [
+      "novel_id",
+      "title",
+      "format",
+      "status",
+      "path"
+    ],
+    "type": "js",
+    "modulePath": "pixiv/novel-download.js",
+    "sourceFile": "pixiv/novel-download.js",
+    "navigateBefore": "https://www.pixiv.net"
+  },
+  {
+    "site": "pixiv",
+    "name": "novels",
+    "description": "List a Pixiv user's novels",
+    "access": "read",
+    "domain": "www.pixiv.net",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "user-id",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Pixiv user ID"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "Number of results"
+      }
+    ],
+    "columns": [
+      "rank",
+      "title",
+      "novel_id",
+      "words",
+      "characters",
+      "bookmarks",
+      "tags",
+      "created",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "pixiv/novels.js",
+    "sourceFile": "pixiv/novels.js",
+    "navigateBefore": "https://www.pixiv.net"
   },
   {
     "site": "pixiv",
@@ -46742,7 +47638,7 @@
   {
     "site": "youtube",
     "name": "search",
-    "description": "Search YouTube videos",
+    "description": "Search YouTube videos, Shorts, channels, and playlists",
     "access": "read",
     "domain": "www.youtube.com",
     "strategy": "cookie",
