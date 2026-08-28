@@ -20,11 +20,14 @@ and extension revisions do not need to match.
 ## Local runtime layout
 
 ```text
+~/.local/bin/opencli -> ~/.local/share/opencli/releases/<release>/runtime/bin/opencli
+
 ~/.local/share/opencli/
 ├── browser-extension/
 │   └── current/                  # fixed Chrome "Load unpacked" path
 └── releases/
     └── <release>/
+        ├── runtime/              # release-specific npm prefix for the CLI
         ├── extension-unpacked/   # immutable rollback source
         ├── *.tgz                 # CLI package
         ├── SHA256SUMS
@@ -33,6 +36,12 @@ and extension revisions do not need to match.
 
 Do not load `extension/` from the Git checkout into Chrome. A fast-forward of
 `main` must not mutate the running extension.
+
+Do not install the fork tarball into npm's default global prefix. The fork
+intentionally retains the upstream package name, so `npm update -g` can replace
+it with the registry's `latest` version. Install each release into its own
+`runtime/` prefix and expose it through `~/.local/bin/opencli`; keep
+`~/.local/bin` ahead of normal npm global bin directories in `PATH`.
 
 ## Upstream sync SOP
 
@@ -122,7 +131,9 @@ rewrite `stable`.
 
 5. Build the CLI tarball. Build an immutable unpacked extension artifact only
    when the extension changed.
-6. Install the candidate CLI tarball. Deploy to the fixed
+6. Install the candidate CLI tarball into the release-specific `runtime/` npm
+   prefix, then repoint `~/.local/bin/opencli` to that runtime. Do not use a
+   bare `npm install -g` for the fork. Deploy to the fixed
    `browser-extension/current` directory only when the extension changed.
 7. When the extension changed, explicitly remind the user that updating files
    does not update Chrome's loaded manifest. Ask them to open
@@ -145,7 +156,9 @@ extension ZIP, and checksums without publishing the upstream npm package name.
 
 ## Rollback
 
-Install the previous release tarball, restore its `extension-unpacked` contents
-to the fixed `browser-extension/current` directory, reload the extension, and
-restart the daemon. Finish with `opencli doctor` and the same real browser
-smoke used during promotion.
+Repoint `~/.local/bin/opencli` to the previous release's `runtime/bin/opencli`.
+If that immutable runtime is missing, reinstall the previous release tarball
+with that release's `runtime/` as the explicit npm prefix first. Restore its
+`extension-unpacked` contents to the fixed `browser-extension/current`
+directory, reload the extension, and restart the daemon. Finish with
+`opencli doctor` and the same real browser smoke used during promotion.
