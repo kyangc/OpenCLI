@@ -5,6 +5,8 @@ const NOTE_ID = '69c131c9000000002800be4c';
 const SIGNED_URL = `https://www.xiaohongshu.com/search_result/${NOTE_ID}?xsec_token=private-token`;
 const SECOND_NOTE_ID = '69c131ca000000002800be4d';
 const SECOND_SIGNED_URL = `https://www.xiaohongshu.com/search_result/${SECOND_NOTE_ID}?xsec_token=second-private-token`;
+const THIRD_NOTE_ID = '69c131cb000000002800be4e';
+const THIRD_SIGNED_URL = `https://www.xiaohongshu.com/search_result/${THIRD_NOTE_ID}?xsec_token=third-private-token`;
 
 function pageWithOneNote(detail = {
     pageUrl: SIGNED_URL,
@@ -59,6 +61,75 @@ function pageWithOneNote(detail = {
         selectTab: vi.fn().mockResolvedValue(undefined),
         closeTab: vi.fn().mockResolvedValue(undefined),
     };
+}
+
+function pageWithStalledMiddleNote() {
+    let activePage = 'search-page';
+    let nextPage = 1;
+    const detailByPage = new Map();
+    const page = {
+        goto: vi.fn((url) => {
+            if (url.includes('/search_result?'))
+                return Promise.resolve();
+            if (url.includes(SECOND_NOTE_ID))
+                return new Promise(() => {});
+            detailByPage.set(activePage, url.includes(THIRD_NOTE_ID) ? 'third' : 'first');
+            return Promise.resolve();
+        }),
+        wait: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi.fn(async (script) => {
+            const source = String(script);
+            if (source.includes('findNoteCard'))
+                return 'content';
+            if (source.includes('const requestedFilters ='))
+                return { status: 'ok' };
+            if (source.includes('const targetCount =')) {
+                return {
+                    rows: [
+                        { title: '第一篇', author: '作者一', likes: '12', url: SIGNED_URL, author_url: '' },
+                        { title: '第二篇', author: '作者二', likes: '8', url: SECOND_SIGNED_URL, author_url: '' },
+                        { title: '第三篇', author: '作者三', likes: '5', url: THIRD_SIGNED_URL, author_url: '' },
+                    ],
+                    diag: {
+                        securityBlock: false,
+                        stopReason: 'target',
+                        scrollHeight: 2600,
+                        clientHeight: 900,
+                        cardCount: 3,
+                        feedClientHeight: 1900,
+                        distinctCardTops: 3,
+                    },
+                };
+            }
+            if (source.includes("document.querySelector('#noteContainer')")) {
+                const detail = detailByPage.get(activePage);
+                return {
+                    pageUrl: detail === 'third' ? THIRD_SIGNED_URL : SIGNED_URL,
+                    securityBlock: false,
+                    loginWall: false,
+                    notFound: false,
+                    title: detail === 'third' ? '第三篇详情' : '第一篇详情',
+                    desc: detail === 'third' ? '第三篇正文' : '第一篇正文',
+                    author: detail === 'third' ? '作者三' : '作者一',
+                    likes: '1',
+                    collects: '1',
+                    comments: '1',
+                    tags: [],
+                };
+            }
+            throw new Error(`Unexpected evaluate script: ${source.slice(0, 80)}`);
+        }),
+        getActivePage: vi.fn(() => activePage),
+        newTab: vi.fn(async () => `detail-page-${nextPage++}`),
+        setActivePage: vi.fn((target) => {
+            activePage = target;
+        }),
+        selectTab: vi.fn(async (target) => {
+            activePage = target;
+        }),
+        closeTab: vi.fn().mockResolvedValue(undefined),
+    };
+    return page;
 }
 
 describe('xiaohongshu search-notes', () => {
@@ -200,6 +271,36 @@ describe('xiaohongshu search-notes', () => {
         });
         expect(JSON.stringify(result)).not.toContain('xsec_token');
         expect(JSON.stringify(result)).not.toContain('second-private-token');
+    });
+
+    it('continues after one detail read stalls until its local deadline', async () => {
+        vi.useFakeTimers();
+        try {
+            const page = pageWithStalledMiddleNote();
+            const settled = vi.fn();
+            void command.func(page, {
+                query: '里斯本 雨天安排',
+                limit: 3,
+            }).then(
+                (value) => settled({ status: 'fulfilled', value }),
+                (reason) => settled({ status: 'rejected', reason }),
+            );
+
+            await vi.advanceTimersByTimeAsync(15_000);
+
+            expect(settled).toHaveBeenCalledOnce();
+            expect(settled.mock.calls[0][0]).toEqual({
+                status: 'fulfilled',
+                value: [
+                    expect.objectContaining({ rank: 1, capture_status: 'captured', excerpt: '第一篇正文' }),
+                    expect.objectContaining({ rank: 2, capture_status: 'unavailable', excerpt: '' }),
+                    expect.objectContaining({ rank: 3, capture_status: 'captured', excerpt: '第三篇正文' }),
+                ],
+            });
+        }
+        finally {
+            vi.useRealTimers();
+        }
     });
 
     it('propagates login loss without exposing the signed URL', async () => {

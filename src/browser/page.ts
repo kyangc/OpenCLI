@@ -17,6 +17,7 @@ import { generateStealthJs } from './stealth.js';
 import { waitForDomStableJs } from './dom-helpers.js';
 import { CDPBasePage } from './base-page.js';
 import { classifyBrowserError } from './errors.js';
+import { CommandExecutionError } from '../errors.js';
 import { log } from '../logger.js';
 
 function isUnsupportedNetworkCaptureError(err: unknown): boolean {
@@ -89,6 +90,7 @@ export class Page extends CDPBasePage {
   }
 
   async goto(url: string, options?: { waitUntil?: 'load' | 'none'; settleMs?: number }): Promise<void> {
+    let expectedPage = this._page;
     let result: { data: unknown; page?: string };
     try {
       result = await sendCommandFull('navigate', {
@@ -101,12 +103,18 @@ export class Page extends CDPBasePage {
       // session lease or open a fresh automation tab. Without this, every subsequent
       // adapter call in the same process keeps re-sending the same dead targetId and
       // cascades into "Page not found:" failures across concurrent calls.
-      if (!isStalePageIdentityError(err) || this._page === undefined) throw err;
+      if (!isStalePageIdentityError(err) || expectedPage === undefined || this._page !== expectedPage) throw err;
       this._page = undefined;
+      expectedPage = undefined;
       result = await sendCommandFull('navigate', {
         url,
         ...this._cmdOpts(),
       });
+    }
+    if (this._page !== expectedPage) {
+      throw new CommandExecutionError(
+        'Browser active page changed while navigation was in flight.',
+      );
     }
     // Remember the page identity (targetId) for subsequent calls
     if (result.page) {

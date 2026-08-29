@@ -297,6 +297,30 @@ describe('Page active target tracking', () => {
     }));
   });
 
+  it('does not let a late navigation overwrite a newer active-page binding', async () => {
+    let resolveNavigate!: (value: { data: { url: string }; page: string }) => void;
+    sendCommandFullMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveNavigate = resolve;
+    }));
+    sendCommandMock.mockResolvedValue(undefined);
+
+    const page = new Page('site:xiaohongshu', undefined, undefined, undefined, 'adapter', 'persistent');
+    page.setActivePage?.('detail-page');
+    const lateNavigation = page.goto('https://www.xiaohongshu.com/explore/detail', { waitUntil: 'none' });
+
+    page.setActivePage?.('search-page');
+    resolveNavigate({
+      data: { url: 'https://www.xiaohongshu.com/explore/detail' },
+      page: 'detail-page',
+    });
+    await expect(lateNavigation).rejects.toMatchObject({
+      code: 'COMMAND_EXEC',
+      message: expect.stringContaining('active page changed'),
+    });
+
+    expect(page.getActivePage()).toBe('search-page');
+  });
+
   // Regression: a Page instance can keep re-sending a cached targetId after the tab
   // has been closed externally, so the extension throws
   // "Page not found: <id> — stale page identity" on follow-up navigation.
