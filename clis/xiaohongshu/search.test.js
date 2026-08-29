@@ -541,8 +541,12 @@ describe('xiaohongshu search', () => {
         const cmd = getRegistry().get('xiaohongshu/search');
         const page = createPageMock(['timeout']);
 
-        await expect(cmd.func(page, { query: '加载超时', limit: 5 })).rejects.toMatchObject({ code: 'TIMEOUT' });
+        await expect(cmd.func(page, { query: '加载超时', limit: 5 })).rejects.toMatchObject({
+            code: 'TIMEOUT',
+            message: 'xiaohongshu search content timed out after 15s',
+        });
         expect(page.evaluate).toHaveBeenCalledTimes(1);
+        expect(String(page.evaluate.mock.calls[0][0])).toContain('}, 15000)');
         expect(page.newTab).not.toHaveBeenCalled();
     });
     it('replaces one proven-collapsed target and closes the old target after rebinding', async () => {
