@@ -7,6 +7,8 @@ const MAX_EXCERPT_CHARS = 560;
 const SEARCH_OPERATION_TIMEOUT_SECONDS = 30;
 const DETAIL_OPERATION_TIMEOUT_SECONDS = 10;
 const DETAIL_READ_TIMEOUT_SECONDS = 15;
+// Leave headroom below OpenCLI's 60s command ceiling for detached tab cleanup.
+const CAPTURE_BATCH_TIMEOUT_SECONDS = 50;
 
 function fieldsFrom(rows) {
     if (!Array.isArray(rows))
@@ -56,7 +58,7 @@ function requireActivePage(page) {
     return searchPage;
 }
 
-async function withDetailDeadline(readPromise) {
+async function withDetailDeadline(readPromise, timeoutMs) {
     let timer;
     try {
         return await Promise.race([
@@ -64,9 +66,9 @@ async function withDetailDeadline(readPromise) {
             new Promise((_, reject) => {
                 timer = setTimeout(() => reject(new TimeoutError(
                     'xiaohongshu note detail',
-                    DETAIL_READ_TIMEOUT_SECONDS,
+                    Math.max(1, Math.ceil(timeoutMs / 1000)),
                     'The stalled note was skipped so the remaining search results could still be read.',
-                )), DETAIL_READ_TIMEOUT_SECONDS * 1000);
+                )), timeoutMs);
             }),
         ]);
     }
@@ -90,9 +92,9 @@ async function readIsolatedDetail(page, searchPage, signedUrl) {
         await tabControl.selectTab(searchPage);
         const detailHandle = boundedBrowserPage(tabControl, DETAIL_OPERATION_TIMEOUT_SECONDS);
         detailHandle.setActivePage(detailPage);
-        return await withDetailDeadline(noteCommand.func(detailHandle, {
+        return await noteCommand.func(detailHandle, {
             'note-id': signedUrl,
-        }));
+        });
     }
     finally {
         // Restore authority before closing: closing the preferred tab would
@@ -138,6 +140,7 @@ export const command = cli({
         'capture_status',
     ],
     func: async (page, kwargs) => {
+        const captureDeadlineAt = Date.now() + CAPTURE_BATCH_TIMEOUT_SECONDS * 1000;
         const searchHandle = boundedBrowserPage(page, SEARCH_OPERATION_TIMEOUT_SECONDS);
         let searchRows;
         try {
@@ -164,7 +167,13 @@ export const command = cli({
                 continue;
             let fields = {};
             try {
-                fields = fieldsFrom(await readIsolatedDetail(searchHandle, searchPage, row.url));
+                const remainingMs = captureDeadlineAt - Date.now();
+                if (remainingMs > 0) {
+                    fields = fieldsFrom(await withDetailDeadline(
+                        readIsolatedDetail(searchHandle, searchPage, row.url),
+                        Math.min(DETAIL_READ_TIMEOUT_SECONDS * 1000, remainingMs),
+                    ));
+                }
             }
             catch (error) {
                 if (error instanceof AuthRequiredError)

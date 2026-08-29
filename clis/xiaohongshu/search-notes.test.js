@@ -308,6 +308,74 @@ describe('xiaohongshu search-notes', () => {
         }
     });
 
+    it('continues when one isolated detail cleanup stalls', async () => {
+        vi.useFakeTimers();
+        try {
+            const page = pageWithStalledMiddleNote();
+            page.goto.mockResolvedValue(undefined);
+            page.closeTab.mockImplementation((target) => target === 'detail-page-2'
+                ? new Promise(() => {})
+                : Promise.resolve());
+            const settled = vi.fn();
+            void command.func(page, {
+                query: '里斯本 雨天安排',
+                limit: 3,
+            }).then(
+                (value) => settled({ status: 'fulfilled', value }),
+                (reason) => settled({ status: 'rejected', reason }),
+            );
+
+            await vi.advanceTimersByTimeAsync(15_000);
+
+            expect(settled).toHaveBeenCalledOnce();
+            expect(settled.mock.calls[0][0]).toEqual({
+                status: 'fulfilled',
+                value: [
+                    expect.objectContaining({ rank: 1, capture_status: 'captured' }),
+                    expect.objectContaining({ rank: 2, capture_status: 'unavailable' }),
+                    expect.objectContaining({ rank: 3, capture_status: 'captured' }),
+                ],
+            });
+            expect(page.newTab).toHaveBeenCalledTimes(3);
+        }
+        finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('returns partial captures before the whole command timeout when the batch budget is exhausted', async () => {
+        vi.useFakeTimers();
+        try {
+            const page = pageWithStalledMiddleNote();
+            page.goto.mockImplementation((url) => url.includes('/search_result?')
+                ? new Promise((resolve) => setTimeout(resolve, 20_000))
+                : new Promise(() => {}));
+            const settled = vi.fn();
+            void command.func(page, {
+                query: '里斯本 雨天安排',
+                limit: 3,
+            }).then(
+                (value) => settled({ status: 'fulfilled', value }),
+                (reason) => settled({ status: 'rejected', reason }),
+            );
+
+            await vi.advanceTimersByTimeAsync(50_000);
+
+            expect(settled).toHaveBeenCalledOnce();
+            expect(settled.mock.calls[0][0]).toEqual({
+                status: 'fulfilled',
+                value: [
+                    expect.objectContaining({ rank: 1, capture_status: 'unavailable' }),
+                    expect.objectContaining({ rank: 2, capture_status: 'unavailable' }),
+                    expect.objectContaining({ rank: 3, capture_status: 'unavailable' }),
+                ],
+            });
+        }
+        finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('fails the batch with a typed timeout when the search phase transport expires', async () => {
         const page = pageWithOneNote();
         page.goto.mockRejectedValueOnce(Object.assign(
