@@ -140,6 +140,8 @@ export interface IPage {
   getActivePage?(): string | undefined;
   /** Bind the page object to a specific page identity (targetId). */
   setActivePage?(page?: string): void;
+  /** Create an independently bound handle whose Browser Bridge calls use a shorter local deadline. */
+  withCommandTimeout?(seconds: number): IPage;
   /** Send a raw CDP command via chrome.debugger passthrough. */
   cdp?(method: string, params?: Record<string, unknown>): Promise<unknown>;
   /** Accept or dismiss the currently open JavaScript alert/confirm/prompt dialog. */

@@ -21,7 +21,7 @@ function pageWithOneNote(detail = {
     comments: '2',
     tags: [],
 }) {
-    return {
+    const page = {
         goto: vi.fn().mockResolvedValue(undefined),
         wait: vi.fn().mockResolvedValue(undefined),
         evaluate: vi.fn(async (script) => {
@@ -61,6 +61,8 @@ function pageWithOneNote(detail = {
         selectTab: vi.fn().mockResolvedValue(undefined),
         closeTab: vi.fn().mockResolvedValue(undefined),
     };
+    page.withCommandTimeout = vi.fn(() => page);
+    return page;
 }
 
 function pageWithStalledMiddleNote() {
@@ -128,6 +130,7 @@ function pageWithStalledMiddleNote() {
             activePage = target;
         }),
         closeTab: vi.fn().mockResolvedValue(undefined),
+        withCommandTimeout: vi.fn(() => page),
     };
     return page;
 }
@@ -297,10 +300,25 @@ describe('xiaohongshu search-notes', () => {
                     expect.objectContaining({ rank: 3, capture_status: 'captured', excerpt: '第三篇正文' }),
                 ],
             });
+            expect(page.withCommandTimeout).toHaveBeenCalledWith(30);
+            expect(page.withCommandTimeout).toHaveBeenCalledWith(10);
         }
         finally {
             vi.useRealTimers();
         }
+    });
+
+    it('fails the batch with a typed timeout when the search phase transport expires', async () => {
+        const page = pageWithOneNote();
+        page.goto.mockRejectedValueOnce(Object.assign(
+            new Error('local browser command deadline expired'),
+            { code: 'command_result_unknown' },
+        ));
+
+        await expect(command.func(page, {
+            query: '里斯本 雨天安排',
+            limit: 3,
+        })).rejects.toMatchObject({ code: 'TIMEOUT' });
     });
 
     it('propagates login loss without exposing the signed URL', async () => {

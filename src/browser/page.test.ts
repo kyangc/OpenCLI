@@ -297,6 +297,30 @@ describe('Page active target tracking', () => {
     }));
   });
 
+  it('creates an independently bound page handle with a shorter command deadline', async () => {
+    sendCommandFullMock.mockResolvedValueOnce({
+      data: { url: 'https://www.xiaohongshu.com/explore/detail' },
+      page: 'detail-page',
+    });
+    sendCommandMock.mockResolvedValue(undefined);
+
+    const page = new Page('site:xiaohongshu', undefined, undefined, undefined, 'adapter', 'persistent');
+    page.setActivePage?.('search-page');
+    const bounded = (page as Page & {
+      withCommandTimeout(seconds: number): Page;
+    }).withCommandTimeout(10);
+    bounded.setActivePage?.('detail-page');
+
+    await bounded.goto('https://www.xiaohongshu.com/explore/detail', { waitUntil: 'none' });
+
+    expect(page.getActivePage()).toBe('search-page');
+    expect(bounded.getActivePage()).toBe('detail-page');
+    expect(sendCommandFullMock).toHaveBeenCalledWith('navigate', expect.objectContaining({
+      page: 'detail-page',
+      localTimeoutSeconds: 10,
+    }));
+  });
+
   it('does not let a late navigation overwrite a newer active-page binding', async () => {
     let resolveNavigate!: (value: { data: { url: string }; page: string }) => void;
     sendCommandFullMock.mockImplementationOnce(() => new Promise((resolve) => {

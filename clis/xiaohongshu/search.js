@@ -932,7 +932,9 @@ export const command = cli({
         catch (err) {
             if (err instanceof CliError)
                 throw err;
-            throw new CommandExecutionError(`Xiaohongshu search failed: ${err?.message ?? String(err)}`);
+            const wrapped = new CommandExecutionError(`Xiaohongshu search failed: ${err?.message ?? String(err)}`);
+            wrapped.cause = err;
+            throw wrapped;
         }
     },
 });

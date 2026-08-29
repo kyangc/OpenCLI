@@ -119,10 +119,13 @@ export function setDaemonCommandTimeoutSeconds(seconds: number | null): void {
 
 function effectiveCommandTimeoutSeconds(params: Omit<DaemonCommand, 'id' | 'action'>): number {
   const base = _userCommandTimeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT_SECONDS;
-  if (typeof params.timeoutMs === 'number' && params.timeoutMs > 0) {
-    return Math.max(base, Math.ceil((params.timeoutMs + EXTENSION_OP_TIMEOUT_MARGIN_MS) / 1000));
+  const extensionAware = typeof params.timeoutMs === 'number' && params.timeoutMs > 0
+    ? Math.max(base, Math.ceil((params.timeoutMs + EXTENSION_OP_TIMEOUT_MARGIN_MS) / 1000))
+    : base;
+  if (typeof params.localTimeoutSeconds === 'number' && params.localTimeoutSeconds > 0) {
+    return Math.min(extensionAware, Math.ceil(params.localTimeoutSeconds));
   }
-  return base;
+  return extensionAware;
 }
 
 /**
@@ -237,6 +240,12 @@ export interface DaemonCommand {
   windowMode?: 'foreground' | 'background';
   /** Custom idle timeout in seconds for this session. Overrides the default. */
   idleTimeout?: number;
+  /**
+   * Client-only cap for one Browser Bridge operation. Removed before the
+   * command is sent; the derived `timeout` / `deadlineAt` remain authoritative
+   * across daemon, extension, and HTTP transport layers.
+   */
+  localTimeoutSeconds?: number;
   /** Frame index for cross-frame operations (0-based, from 'frames' action) */
   frameIndex?: number;
   /** Browser profile/context REQUIRED for this command (--profile / OPENCLI_PROFILE). Fails loud when offline. */
@@ -328,6 +337,7 @@ async function sendCommandRaw(
 ): Promise<DaemonResult> {
   const timeoutSeconds = effectiveCommandTimeoutSeconds(params);
   const deadlineAt = Date.now() + timeoutSeconds * 1000;
+  const { localTimeoutSeconds: _localTimeoutSeconds, ...wireParams } = params;
   const rawWindowMode = process.env.OPENCLI_WINDOW;
   const envWindowMode = rawWindowMode === 'foreground' || rawWindowMode === 'background'
     ? rawWindowMode
@@ -375,7 +385,7 @@ async function sendCommandRaw(
     const command: DaemonCommand = {
       id,
       action,
-      ...params,
+      ...wireParams,
       timeout: timeoutSeconds,
       deadlineAt,
       ...(contextId && { contextId }),
