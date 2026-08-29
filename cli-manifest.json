@@ -45949,6 +45949,45 @@
   },
   {
     "site": "xiaohongshu",
+    "name": "search-notes",
+    "description": "搜索小红书笔记并读取脱敏短摘录",
+    "access": "read",
+    "domain": "www.xiaohongshu.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "query",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Search keyword"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 5,
+        "required": false,
+        "help": "Number of notes"
+      }
+    ],
+    "columns": [
+      "rank",
+      "title",
+      "author",
+      "published_at",
+      "canonical_url",
+      "excerpt",
+      "capture_status"
+    ],
+    "type": "js",
+    "modulePath": "xiaohongshu/search-notes.js",
+    "sourceFile": "xiaohongshu/search-notes.js",
+    "navigateBefore": false,
+    "siteSession": "persistent"
+  },
+  {
+    "site": "xiaohongshu",
     "name": "unfollow",
     "description": "取消关注小红书用户 (profile UI automation)",
     "access": "write",
