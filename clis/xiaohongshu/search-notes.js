@@ -4,6 +4,8 @@ import { command as noteCommand } from './note.js';
 import { command as searchCommand, noteUrlInfo } from './search.js';
 
 const MAX_EXCERPT_CHARS = 560;
+const SEARCH_OPERATION_TIMEOUT_SECONDS = 30;
+const DETAIL_OPERATION_TIMEOUT_SECONDS = 10;
 const DETAIL_READ_TIMEOUT_SECONDS = 15;
 
 function fieldsFrom(rows) {
@@ -33,14 +35,18 @@ function canonicalNoteUrl(value) {
     return noteId ? `https://www.xiaohongshu.com/explore/${noteId}` : '';
 }
 
-function requireDetailIsolation(page) {
+function boundedBrowserPage(page, timeoutSeconds) {
     if (typeof page.getActivePage !== 'function' || typeof page.newTab !== 'function' ||
         typeof page.setActivePage !== 'function' || typeof page.closeTab !== 'function' ||
-        typeof page.selectTab !== 'function') {
+        typeof page.selectTab !== 'function' || typeof page.withCommandTimeout !== 'function') {
         throw new CommandExecutionError(
             'Xiaohongshu search-notes requires Browser Bridge tab isolation for bounded detail reads.',
         );
     }
+    return page.withCommandTimeout(timeoutSeconds);
+}
+
+function requireActivePage(page) {
     const searchPage = page.getActivePage();
     if (!searchPage) {
         throw new CommandExecutionError(
@@ -71,7 +77,8 @@ async function withDetailDeadline(readPromise) {
 }
 
 async function readIsolatedDetail(page, searchPage, signedUrl) {
-    const detailPage = await page.newTab();
+    const tabControl = boundedBrowserPage(page, DETAIL_OPERATION_TIMEOUT_SECONDS);
+    const detailPage = await tabControl.newTab();
     if (!detailPage) {
         throw new CommandExecutionError(
             'Xiaohongshu search-notes could not create an isolated detail page.',
@@ -80,19 +87,32 @@ async function readIsolatedDetail(page, searchPage, signedUrl) {
     try {
         // Keep the persistent session anchored to the search page. The local
         // Page handle can still target the isolated detail tab explicitly.
-        await page.selectTab(searchPage);
-        page.setActivePage(detailPage);
-        return await withDetailDeadline(noteCommand.func(page, {
+        await tabControl.selectTab(searchPage);
+        const detailHandle = boundedBrowserPage(tabControl, DETAIL_OPERATION_TIMEOUT_SECONDS);
+        detailHandle.setActivePage(detailPage);
+        return await withDetailDeadline(noteCommand.func(detailHandle, {
             'note-id': signedUrl,
         }));
     }
     finally {
         // Restore authority before closing: closing the preferred tab would
         // release the whole persistent site session instead of one detail tab.
-        page.setActivePage(searchPage);
-        await page.selectTab(searchPage);
-        await page.closeTab(detailPage);
+        tabControl.setActivePage(searchPage);
+        await tabControl.selectTab(searchPage);
+        await tabControl.closeTab(detailPage);
     }
+}
+
+function isBoundedTransportFailure(error) {
+    let current = error;
+    const seen = new Set();
+    while (current && (typeof current === 'object' || typeof current === 'function') && !seen.has(current)) {
+        seen.add(current);
+        if (current.code === 'command_result_unknown' || current.code === 'cdp_timeout')
+            return true;
+        current = current.cause;
+    }
+    return false;
 }
 
 export const command = cli({
@@ -118,11 +138,25 @@ export const command = cli({
         'capture_status',
     ],
     func: async (page, kwargs) => {
-        const searchRows = await searchCommand.func(page, {
-            query: kwargs.query,
-            limit: kwargs.limit,
-        });
-        const searchPage = requireDetailIsolation(page);
+        const searchHandle = boundedBrowserPage(page, SEARCH_OPERATION_TIMEOUT_SECONDS);
+        let searchRows;
+        try {
+            searchRows = await searchCommand.func(searchHandle, {
+                query: kwargs.query,
+                limit: kwargs.limit,
+            });
+        }
+        catch (error) {
+            if (isBoundedTransportFailure(error)) {
+                throw new TimeoutError(
+                    'xiaohongshu search phase',
+                    SEARCH_OPERATION_TIMEOUT_SECONDS,
+                    'The search page did not respond within its local browser-operation budget.',
+                );
+            }
+            throw error;
+        }
+        const searchPage = requireActivePage(searchHandle);
         const captures = [];
         for (const [index, row] of searchRows.entries()) {
             const canonicalUrl = canonicalNoteUrl(row.url);
@@ -130,12 +164,12 @@ export const command = cli({
                 continue;
             let fields = {};
             try {
-                fields = fieldsFrom(await readIsolatedDetail(page, searchPage, row.url));
+                fields = fieldsFrom(await readIsolatedDetail(searchHandle, searchPage, row.url));
             }
             catch (error) {
                 if (error instanceof AuthRequiredError)
                     throw error;
-                if (!(error instanceof CliError)) {
+                if (!(error instanceof CliError) && !isBoundedTransportFailure(error)) {
                     throw new CommandExecutionError(
                         'Xiaohongshu search-notes detail read failed.',
                     );

@@ -647,6 +647,27 @@ describe('daemon-client', () => {
     expect(body.timeout).toBe(300);
   });
 
+  it('allows one browser operation to use a shorter local transport deadline', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ id: 'server', ok: true, data: 1 }),
+    } as Response);
+
+    await sendCommand('exec', {
+      code: '1',
+      localTimeoutSeconds: 10,
+    } as Parameters<typeof sendCommand>[1]);
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as {
+      timeout?: number;
+      localTimeoutSeconds?: number;
+    };
+    expect(body.timeout).toBe(10);
+    expect(body).not.toHaveProperty('localTimeoutSeconds');
+  });
+
   it('client HTTP abort fires only after the daemon timer margin (timeout*1000 + 10s)', async () => {
     vi.useFakeTimers();
     try {
@@ -667,6 +688,38 @@ describe('daemon-client', () => {
 
       // Just before the margin the daemon still owns the deadline — no abort.
       await vi.advanceTimersByTimeAsync(120_000 + 9_999);
+      expect(aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(aborted).toBe(true);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a local command deadline also bounds the client HTTP request', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.mocked(fetch);
+      let aborted = false;
+      fetchMock.mockImplementationOnce((_url, init) => new Promise((_, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          aborted = true;
+          reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' }));
+        });
+      }));
+
+      const pending = sendCommand('exec', {
+        code: '1',
+        localTimeoutSeconds: 10,
+      });
+      const assertion = expect(pending).rejects.toMatchObject({
+        name: 'BrowserCommandError',
+        code: 'command_result_unknown',
+      } satisfies Partial<BrowserCommandError>);
+
+      await vi.advanceTimersByTimeAsync(19_999);
       expect(aborted).toBe(false);
 
       await vi.advanceTimersByTimeAsync(1);
