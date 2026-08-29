@@ -1,9 +1,10 @@
 import { cli, Strategy } from '@jackwener/opencli/registry';
-import { AuthRequiredError, CliError, CommandExecutionError } from '@jackwener/opencli/errors';
+import { AuthRequiredError, CliError, CommandExecutionError, TimeoutError } from '@jackwener/opencli/errors';
 import { command as noteCommand } from './note.js';
 import { command as searchCommand, noteUrlInfo } from './search.js';
 
 const MAX_EXCERPT_CHARS = 560;
+const DETAIL_READ_TIMEOUT_SECONDS = 15;
 
 function fieldsFrom(rows) {
     if (!Array.isArray(rows))
@@ -30,6 +31,68 @@ function sanitizedText(value, limit) {
 function canonicalNoteUrl(value) {
     const noteId = noteUrlInfo(value, 'www.xiaohongshu.com').key;
     return noteId ? `https://www.xiaohongshu.com/explore/${noteId}` : '';
+}
+
+function requireDetailIsolation(page) {
+    if (typeof page.getActivePage !== 'function' || typeof page.newTab !== 'function' ||
+        typeof page.setActivePage !== 'function' || typeof page.closeTab !== 'function' ||
+        typeof page.selectTab !== 'function') {
+        throw new CommandExecutionError(
+            'Xiaohongshu search-notes requires Browser Bridge tab isolation for bounded detail reads.',
+        );
+    }
+    const searchPage = page.getActivePage();
+    if (!searchPage) {
+        throw new CommandExecutionError(
+            'Xiaohongshu search-notes cannot identify its search-results page for detail isolation.',
+        );
+    }
+    return searchPage;
+}
+
+async function withDetailDeadline(readPromise) {
+    let timer;
+    try {
+        return await Promise.race([
+            readPromise,
+            new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new TimeoutError(
+                    'xiaohongshu note detail',
+                    DETAIL_READ_TIMEOUT_SECONDS,
+                    'The stalled note was skipped so the remaining search results could still be read.',
+                )), DETAIL_READ_TIMEOUT_SECONDS * 1000);
+            }),
+        ]);
+    }
+    finally {
+        if (timer !== undefined)
+            clearTimeout(timer);
+    }
+}
+
+async function readIsolatedDetail(page, searchPage, signedUrl) {
+    const detailPage = await page.newTab();
+    if (!detailPage) {
+        throw new CommandExecutionError(
+            'Xiaohongshu search-notes could not create an isolated detail page.',
+        );
+    }
+    try {
+        // Keep the persistent session anchored to the search page. The local
+        // Page handle can still target the isolated detail tab explicitly.
+        await page.selectTab(searchPage);
+        page.setActivePage(detailPage);
+        return await withDetailDeadline(noteCommand.func(page, {
+            'note-id': signedUrl,
+        }));
+    }
+    finally {
+        // Restore authority before closing: closing the preferred tab would
+        // release the whole persistent site session instead of one detail tab.
+        page.setActivePage(searchPage);
+        await page.selectTab(searchPage);
+        await page.closeTab(detailPage);
+    }
 }
 
 export const command = cli({
@@ -59,6 +122,7 @@ export const command = cli({
             query: kwargs.query,
             limit: kwargs.limit,
         });
+        const searchPage = requireDetailIsolation(page);
         const captures = [];
         for (const [index, row] of searchRows.entries()) {
             const canonicalUrl = canonicalNoteUrl(row.url);
@@ -66,9 +130,7 @@ export const command = cli({
                 continue;
             let fields = {};
             try {
-                fields = fieldsFrom(await noteCommand.func(page, {
-                    'note-id': row.url,
-                }));
+                fields = fieldsFrom(await readIsolatedDetail(page, searchPage, row.url));
             }
             catch (error) {
                 if (error instanceof AuthRequiredError)
