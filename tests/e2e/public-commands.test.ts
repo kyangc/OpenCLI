@@ -35,6 +35,24 @@ function isExpectedGoogleRestriction(code: number, stderr: string): boolean {
   return /fetch failed/.test(stderr) || /Error \[FETCH_ERROR\]: HTTP (403|429|451|503)\b/.test(stderr);
 }
 
+function isExpectedDictionaryRestriction(
+  code: number,
+  stdout: string,
+  stderr: string,
+  elapsedMs: number,
+): boolean {
+  if (code === 0) return false;
+  const output = `${stdout}\n${stderr}`;
+  return /FETCH_ERROR|fetch failed|HTTP (403|408|425|429|451|5\d\d)\b|ETIMEDOUT|ECONN(?:RESET|REFUSED)|ENOTFOUND|EAI_AGAIN|UND_ERR_/.test(output)
+    || (stdout.trim() === '' && stderr.trim() === '' && elapsedMs >= 20_000);
+}
+
+async function runDictionary(args: string[]) {
+  const startedAt = Date.now();
+  const result = await runCli(['dictionary', ...args]);
+  return { ...result, elapsedMs: Date.now() - startedAt };
+}
+
 // Keep old name as alias for existing tests
 const isExpectedXiaoyuzhouRestriction = isExpectedChineseSiteRestriction;
 
@@ -46,6 +64,19 @@ describe('public command restriction detectors', () => {
         '⚠️ Unable to reach Apple Podcasts charts for US\n→ Apple charts may be temporarily unavailable (ECONNRESET). Try again later.\n',
       ),
     ).toBe(true);
+  });
+
+  it('treats a silent dictionary timeout as an expected upstream restriction', () => {
+    expect(isExpectedDictionaryRestriction(1, '', '', 20_000)).toBe(true);
+  });
+
+  it('does not hide an ordinary dictionary command failure', () => {
+    expect(isExpectedDictionaryRestriction(
+      1,
+      '',
+      'Error [COMMAND_EXEC]: adapter mapping is invalid',
+      100,
+    )).toBe(false);
   });
 });
 
@@ -492,7 +523,11 @@ describe('public commands E2E', () => {
 
   // ── dictionary (public API, browser: false) ──
   it('dictionary search returns word definitions', async () => {
-    const { stdout, code } = await runCli(['dictionary', 'search', 'serendipity', '-f', 'json']);
+    const { stdout, stderr, code, elapsedMs } = await runDictionary(['search', 'serendipity', '-f', 'json']);
+    if (isExpectedDictionaryRestriction(code, stdout, stderr, elapsedMs)) {
+      console.warn(`dictionary search skipped: ${stderr.trim() || 'upstream request timed out'}`);
+      return;
+    }
     expect(code).toBe(0);
     const data = parseJsonOutput(stdout);
     expect(Array.isArray(data)).toBe(true);
@@ -503,7 +538,11 @@ describe('public commands E2E', () => {
   }, 30_000);
 
   it('dictionary synonyms returns synonyms', async () => {
-    const { stdout, code } = await runCli(['dictionary', 'synonyms', 'serendipity', '-f', 'json']);
+    const { stdout, stderr, code, elapsedMs } = await runDictionary(['synonyms', 'serendipity', '-f', 'json']);
+    if (isExpectedDictionaryRestriction(code, stdout, stderr, elapsedMs)) {
+      console.warn(`dictionary synonyms skipped: ${stderr.trim() || 'upstream request timed out'}`);
+      return;
+    }
     expect(code).toBe(0);
     const data = parseJsonOutput(stdout);
     expect(Array.isArray(data)).toBe(true);
@@ -513,7 +552,11 @@ describe('public commands E2E', () => {
   }, 30_000);
 
   it('dictionary examples returns examples', async () => {
-    const { stdout, code } = await runCli(['dictionary', 'examples', 'perfect', '-f', 'json']);
+    const { stdout, stderr, code, elapsedMs } = await runDictionary(['examples', 'perfect', '-f', 'json']);
+    if (isExpectedDictionaryRestriction(code, stdout, stderr, elapsedMs)) {
+      console.warn(`dictionary examples skipped: ${stderr.trim() || 'upstream request timed out'}`);
+      return;
+    }
     expect(code).toBe(0);
     const data = parseJsonOutput(stdout);
     expect(Array.isArray(data)).toBe(true);
