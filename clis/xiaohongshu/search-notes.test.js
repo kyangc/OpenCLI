@@ -175,6 +175,25 @@ describe('xiaohongshu search-notes', () => {
         ]);
     });
 
+    it('does not require the optional search-filter panel when no filters are exposed', async () => {
+        const page = pageWithOneNote();
+        const evaluate = page.evaluate.getMockImplementation();
+        page.evaluate.mockImplementation(async (script) => {
+            if (String(script).includes('const requestedFilters =')) {
+                return { status: 'layout', detail: 'option_not_found' };
+            }
+            return evaluate(script);
+        });
+
+        const result = await command.func(page, {
+            query: '里斯本 雨天安排',
+            limit: 1,
+        });
+
+        expect(result).toHaveLength(1);
+        expect(result[0].title).toBe('里斯本雨天慢游');
+    });
+
     it('uses signed URLs only inside the command and emits a sanitized capture', async () => {
         const page = pageWithOneNote();
 
