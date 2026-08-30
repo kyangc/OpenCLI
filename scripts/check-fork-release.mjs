@@ -58,6 +58,10 @@ if (!releaseMatch) {
     if (extensionManifest.version !== expectedManifestVersion) {
       fail(`extension manifest version ${extensionManifest.version} must be ${expectedManifestVersion}`);
     }
+    const expectedServiceWorker = `dist/background-${expectedManifestVersion}.js`;
+    if (extensionManifest.background?.service_worker !== expectedServiceWorker) {
+      fail(`extension service worker must be ${expectedServiceWorker}`);
+    }
     if (extensionManifest.version_name !== extensionRelease) {
       fail('extension manifest version_name must match the extension package release');
     }
