@@ -21,6 +21,7 @@ WORKDIR /app
 COPY services/opencli-backend/package.json services/opencli-backend/package-lock.json ./
 RUN npm ci --omit=dev
 COPY services/opencli-backend/src /app/src
+COPY services/opencli-backend/scripts/smoke-deployment.mjs /app/scripts/smoke-deployment.mjs
 ENV HOME=/home/node \
     OPENCLI_DATABASE_PATH=/data/jobs.sqlite3 \
     OPENCLI_API_HOST=0.0.0.0 \

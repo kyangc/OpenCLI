@@ -42,7 +42,7 @@ export class SessionMonitor {
   }
 
   async checkNow(now = Date.now()) {
-    if (this.checking) return [];
+    if (this.checking || this.store.isPaused()) return [];
     this.checking = true;
     const jobs = [];
     try {
