@@ -26,6 +26,8 @@ cleanup() {
   if [ "$status" -ne 0 ]; then
     docker compose --env-file "$smoke_env" -f "$compose_file" logs --no-color || true
   fi
+  docker exec --user 0 opencli-backend \
+    chmod -R a+rwX /data /home/node/.opencli || true
   docker compose --env-file "$smoke_env" -f "$compose_file" \
     down --volumes --remove-orphans || true
   case "$smoke_runtime" in

@@ -53,6 +53,7 @@ printf 'node %s\\n' "$*" >> "$SMOKE_CALL_LOG"
     ]);
     assert.match(calls, /docker compose .* up -d --no-build/);
     assert.match(calls, /node .*smoke-deployment\.mjs --base-url http:\/\/127\.0\.0\.1:28080 --expected-version 2\.0\.0/);
+    assert.match(calls, /docker exec --user 0 opencli-backend chmod -R a\+rwX \/data \/home\/node\/\.opencli/);
     assert.match(calls, /docker compose .* down --volumes --remove-orphans/);
     assert.match(calls, /drwxrwxrwx .*\/data/);
     assert.match(calls, /drwxrwxrwx .*\/opencli-state/);
