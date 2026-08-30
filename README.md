@@ -13,7 +13,7 @@
 > This repository is the **kyangc production fork** of
 > [jackwener/opencli](https://github.com/jackwener/opencli). Install fork
 > releases from this repository rather than npm or the upstream Chrome Web
-> Store. The current lines are CLI `2.0.0` (`kyangc-v2.0.0`) and extension
+> Store. The current lines are CLI `2.0.1` (`kyangc-v2.0.1`) and extension
 > `2.0.0` (`kyangc-ext-v2.0.0`), based on upstream `1.8.7` / extension
 > `1.0.23`.
 
@@ -81,12 +81,12 @@ do not install the registry package by name.
 
 ```bash
 node --version
-grep 'jackwener-opencli-2.0.0.tgz$' SHA256SUMS | sha256sum -c -
+grep 'jackwener-opencli-2.0.1.tgz$' SHA256SUMS | sha256sum -c -
 # macOS: use `shasum -a 256 -c -` after the pipe instead
 
-OPENCLI_RELEASE=kyangc-v2.0.0
+OPENCLI_RELEASE=kyangc-v2.0.1
 OPENCLI_PREFIX="$HOME/.local/share/opencli/releases/$OPENCLI_RELEASE/runtime"
-npm install --prefix "$OPENCLI_PREFIX" --global ./jackwener-opencli-2.0.0.tgz
+npm install --prefix "$OPENCLI_PREFIX" --global ./jackwener-opencli-2.0.1.tgz
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$OPENCLI_PREFIX/bin/opencli" "$HOME/.local/bin/opencli"
 opencli --version

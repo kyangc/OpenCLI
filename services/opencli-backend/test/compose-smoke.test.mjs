@@ -38,7 +38,7 @@ printf 'node %s\\n' "$*" >> "$SMOKE_CALL_LOG"
   await chmod(path.join(fakeBin, 'node'), 0o755);
 
   try {
-    await execFileAsync('/bin/sh', [composeSmoke, '2.0.0'], {
+    await execFileAsync('/bin/sh', [composeSmoke, '2.0.1', '2.0.0'], {
       env: {
         ...process.env,
         PATH: `${fakeBin}:${process.env.PATH}`,
@@ -52,11 +52,11 @@ printf 'node %s\\n' "$*" >> "$SMOKE_CALL_LOG"
       readFile(environmentCopy, 'utf8'),
     ]);
     assert.match(calls, /docker compose .* up -d --no-build/);
-    assert.match(calls, /node .*smoke-deployment\.mjs --base-url http:\/\/127\.0\.0\.1:28080 --expected-version 2\.0\.0/);
+    assert.match(calls, /node .*smoke-deployment\.mjs --base-url http:\/\/127\.0\.0\.1:28080 --expected-daemon-version 2\.0\.1 --expected-extension-version 2\.0\.0/);
     assert.match(calls, /docker exec --user 0 opencli-backend chmod -R a\+rwX \/data \/home\/node\/\.opencli/);
     assert.match(calls, /docker compose .* down --volumes --remove-orphans/);
-    assert.match(calls, /drwxrwxrwx .*\/data/);
-    assert.match(calls, /drwxrwxrwx .*\/opencli-state/);
+    assert.match(calls, /drwxrwxrwx@? .*\/data/);
+    assert.match(calls, /drwxrwxrwx@? .*\/opencli-state/);
     assert.match(environment, /^OPENCLI_SESSION_CHECK_SITES=disabled$/m);
     assert.doesNotMatch(environment, /xiaohongshu|twitter/);
   } finally {
@@ -78,7 +78,7 @@ printf 'docker %s\\n' "$*" >> "$SMOKE_CALL_LOG"
 
   try {
     await assert.rejects(
-      execFileAsync('/bin/sh', [composeSmoke, '2.0.0'], {
+      execFileAsync('/bin/sh', [composeSmoke, '2.0.1', '2.0.0'], {
         env: {
           ...process.env,
           PATH: `${fakeBin}:${process.env.PATH}`,
