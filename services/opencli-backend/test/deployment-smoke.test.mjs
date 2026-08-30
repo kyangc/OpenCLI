@@ -27,7 +27,7 @@ test('deployment smoke waits for a ready idle bridge using read-only health prob
       bridge: {
         ready,
         daemon: ready ? 'running' : 'starting',
-        daemonVersion: '2.0.0',
+        daemonVersion: '2.0.1',
         extensionConnected: ready,
         extensionVersion: '2.0.0',
         profileCount: ready ? 1 : 0,
@@ -47,14 +47,15 @@ test('deployment smoke waits for a ready idle bridge using read-only health prob
     const { stdout } = await execFileAsync(process.execPath, [
       smokeScript,
       '--base-url', `http://127.0.0.1:${address.port}`,
-      '--expected-version', '2.0.0',
+      '--expected-daemon-version', '2.0.1',
+      '--expected-extension-version', '2.0.0',
       '--timeout-seconds', '2',
       '--poll-interval-ms', '10',
     ]);
 
     assert.deepEqual(JSON.parse(stdout), {
       status: 'passed',
-      daemonVersion: '2.0.0',
+      daemonVersion: '2.0.1',
       extensionVersion: '2.0.0',
       profileCount: 1,
       pendingCommands: 0,
@@ -105,7 +106,8 @@ test('deployment smoke fails while any queued work could start after release', a
       execFileAsync(process.execPath, [
         smokeScript,
         '--base-url', `http://127.0.0.1:${address.port}`,
-        '--expected-version', '2.0.0',
+        '--expected-daemon-version', '2.0.0',
+        '--expected-extension-version', '2.0.0',
         '--timeout-seconds', '0.05',
         '--poll-interval-ms', '10',
       ]),

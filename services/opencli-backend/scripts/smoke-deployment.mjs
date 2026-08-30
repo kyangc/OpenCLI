@@ -11,7 +11,8 @@ function parsePositiveNumber(value, flag) {
 function parseArgs(argv) {
   const options = {
     baseUrl: null,
-    expectedVersion: null,
+    expectedDaemonVersion: null,
+    expectedExtensionVersion: null,
     timeoutMs: 120_000,
     pollIntervalMs: 1_000,
   };
@@ -20,7 +21,8 @@ function parseArgs(argv) {
     const value = argv[index + 1];
     if (!value) throw new Error(`${flag ?? 'argument'} requires a value`);
     if (flag === '--base-url') options.baseUrl = value;
-    else if (flag === '--expected-version') options.expectedVersion = value;
+    else if (flag === '--expected-daemon-version') options.expectedDaemonVersion = value;
+    else if (flag === '--expected-extension-version') options.expectedExtensionVersion = value;
     else if (flag === '--timeout-seconds') {
       options.timeoutMs = parsePositiveNumber(value, flag) * 1_000;
     } else if (flag === '--poll-interval-ms') {
@@ -30,7 +32,8 @@ function parseArgs(argv) {
     }
   }
   if (!options.baseUrl) throw new Error('--base-url is required');
-  if (!options.expectedVersion) throw new Error('--expected-version is required');
+  if (!options.expectedDaemonVersion) throw new Error('--expected-daemon-version is required');
+  if (!options.expectedExtensionVersion) throw new Error('--expected-extension-version is required');
   options.baseUrl = new URL(options.baseUrl).toString().replace(/\/$/, '');
   return options;
 }
@@ -86,10 +89,10 @@ async function run() {
       if (!response.ok || body?.status !== 'ready') return null;
       const bridge = body.bridge ?? {};
       const queue = body.queue ?? {};
-      if (bridge.daemonVersion !== options.expectedVersion) {
+      if (bridge.daemonVersion !== options.expectedDaemonVersion) {
         throw new Error(`unexpected daemon version: ${bridge.daemonVersion ?? 'missing'}`);
       }
-      if (bridge.extensionVersion !== options.expectedVersion) {
+      if (bridge.extensionVersion !== options.expectedExtensionVersion) {
         throw new Error(`unexpected extension version: ${bridge.extensionVersion ?? 'missing'}`);
       }
       if (!bridge.ready || !bridge.extensionConnected || bridge.profileCount < 1) return null;

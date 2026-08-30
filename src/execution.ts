@@ -423,7 +423,7 @@ export async function executeCommand(
         }
         }, { retain: keepTab });
         return outcome.result;
-      }, { session, cdpEndpoint, ...profileRouting, windowMode, surface: 'adapter', siteSession });
+      }, { session, cdpEndpoint, ...profileRouting, windowMode, surface: 'adapter', siteSession, access: cmd.access });
       } catch (err) {
         browserRunError = err;
         throw err;

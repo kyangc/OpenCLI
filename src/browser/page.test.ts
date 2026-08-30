@@ -55,7 +55,7 @@ describe('Page.getCurrentUrl', () => {
     sendCommandFullMock.mockResolvedValueOnce({ page: 'page-1', data: { url: 'https://chatgpt.com/' } });
     sendCommandMock.mockResolvedValueOnce(null);
 
-    const page = new Page('site:chatgpt', undefined, undefined, undefined, 'adapter', 'persistent');
+    const page = new Page('site:chatgpt', undefined, undefined, undefined, 'adapter', 'persistent', undefined, undefined, 'read');
 
     await page.goto('https://chatgpt.com/', { waitUntil: 'none' });
     await page.evaluate('document.title');
@@ -64,11 +64,13 @@ describe('Page.getCurrentUrl', () => {
       session: 'site:chatgpt',
       surface: 'adapter',
       siteSession: 'persistent',
+      access: 'read',
     }));
     expect(sendCommandMock).toHaveBeenCalledWith('exec', expect.objectContaining({
       session: 'site:chatgpt',
       surface: 'adapter',
       siteSession: 'persistent',
+      access: 'read',
       page: 'page-1',
     }));
   });
@@ -304,7 +306,7 @@ describe('Page active target tracking', () => {
     });
     sendCommandMock.mockResolvedValue(undefined);
 
-    const page = new Page('site:xiaohongshu', undefined, undefined, undefined, 'adapter', 'persistent');
+    const page = new Page('site:xiaohongshu', undefined, undefined, undefined, 'adapter', 'persistent', undefined, undefined, 'read');
     page.setActivePage?.('search-page');
     const bounded = (page as Page & {
       withCommandTimeout(seconds: number): Page;
@@ -318,6 +320,7 @@ describe('Page active target tracking', () => {
     expect(sendCommandFullMock).toHaveBeenCalledWith('navigate', expect.objectContaining({
       page: 'detail-page',
       localTimeoutSeconds: 10,
+      access: 'read',
     }));
   });
 

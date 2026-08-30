@@ -53,6 +53,7 @@ export class Page extends CDPBasePage {
     /** Soft profile preference (config default) — daemon arbitrates; see profileRouteParams. */
     public readonly preferredContextId?: string,
     private readonly _localTimeoutSeconds?: number,
+    private readonly access?: 'read' | 'write',
   ) {
     super();
     this._idleTimeout = idleTimeout;
@@ -64,7 +65,7 @@ export class Page extends CDPBasePage {
   private _networkCaptureWarned = false;
 
   /** Helper: spread session into command params */
-  private _sessionOpts(): { session: string; surface: 'browser' | 'adapter'; idleTimeout?: number; contextId?: string; preferredContextId?: string; windowMode?: 'foreground' | 'background'; siteSession?: 'ephemeral' | 'persistent'; localTimeoutSeconds?: number } {
+  private _sessionOpts(): { session: string; surface: 'browser' | 'adapter'; idleTimeout?: number; contextId?: string; preferredContextId?: string; windowMode?: 'foreground' | 'background'; siteSession?: 'ephemeral' | 'persistent'; localTimeoutSeconds?: number; access?: 'read' | 'write' } {
     return {
       session: this.session,
       surface: this.surface,
@@ -74,6 +75,7 @@ export class Page extends CDPBasePage {
       ...(this.windowMode && { windowMode: this.windowMode }),
       ...(this.siteSession && { siteSession: this.siteSession }),
       ...(this._localTimeoutSeconds != null && { localTimeoutSeconds: this._localTimeoutSeconds }),
+      ...(this.access && { access: this.access }),
     };
   }
 
@@ -89,6 +91,7 @@ export class Page extends CDPBasePage {
       ...(this.windowMode && { windowMode: this.windowMode }),
       ...(this.siteSession && { siteSession: this.siteSession }),
       ...(this._localTimeoutSeconds != null && { localTimeoutSeconds: this._localTimeoutSeconds }),
+      ...(this.access && { access: this.access }),
     };
   }
 
@@ -190,6 +193,7 @@ export class Page extends CDPBasePage {
       this.siteSession,
       this.preferredContextId,
       seconds,
+      this.access,
     );
     bounded._page = this._page;
     bounded._lastUrl = this._lastUrl;

@@ -1,9 +1,10 @@
 #!/bin/sh
 set -eu
 
-expected_version=${1:-}
-if [ -z "$expected_version" ]; then
-  echo "usage: smoke-compose.sh <expected-cli-and-extension-version>" >&2
+expected_daemon_version=${1:-}
+expected_extension_version=${2:-}
+if [ -z "$expected_daemon_version" ] || [ -z "$expected_extension_version" ]; then
+  echo "usage: smoke-compose.sh <expected-daemon-version> <expected-extension-version>" >&2
   exit 2
 fi
 
@@ -63,6 +64,7 @@ docker compose --env-file "$smoke_env" -f "$compose_file" config --quiet
 docker compose --env-file "$smoke_env" -f "$compose_file" up -d --no-build
 node "$backend_root/scripts/smoke-deployment.mjs" \
   --base-url http://127.0.0.1:28080 \
-  --expected-version "$expected_version" \
+  --expected-daemon-version "$expected_daemon_version" \
+  --expected-extension-version "$expected_extension_version" \
   --timeout-seconds 180 \
   --poll-interval-ms 1000

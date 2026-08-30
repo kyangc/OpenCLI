@@ -223,7 +223,7 @@ describe('executeCommand — non-browser timeout', () => {
   it('reuses a persistent site browser session and keeps the tab lease open', async () => {
     const closeWindow = vi.fn().mockResolvedValue(undefined);
     const mockPage = { closeWindow } as any;
-    const sessionOpts: Array<{ session?: string; idleTimeout?: number; windowMode?: string; siteSession?: string }> = [];
+    const sessionOpts: Array<{ session?: string; idleTimeout?: number; windowMode?: string; siteSession?: string; access?: string }> = [];
 
     vi.spyOn(capRouting, 'shouldUseBrowserSession').mockReturnValue(true);
     vi.spyOn(runtime, 'browserSession').mockImplementation(async (_Factory, fn, opts) => {
@@ -245,8 +245,8 @@ describe('executeCommand — non-browser timeout', () => {
     await executeCommand(cmd, {}, false, { keepTab: 'false' });
 
     expect(sessionOpts).toHaveLength(2);
-    expect(sessionOpts[0]).toMatchObject({ session: 'site:test-execution', windowMode: 'background', siteSession: 'persistent' });
-    expect(sessionOpts[1]).toMatchObject({ session: 'site:test-execution', windowMode: 'background', siteSession: 'persistent' });
+    expect(sessionOpts[0]).toMatchObject({ session: 'site:test-execution', windowMode: 'background', siteSession: 'persistent', access: 'read' });
+    expect(sessionOpts[1]).toMatchObject({ session: 'site:test-execution', windowMode: 'background', siteSession: 'persistent', access: 'read' });
     expect(sessionOpts[0]?.idleTimeout).toBeUndefined();
     expect(sessionOpts[1]?.idleTimeout).toBeUndefined();
     expect(closeWindow).not.toHaveBeenCalled();
