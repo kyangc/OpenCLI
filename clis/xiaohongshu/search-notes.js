@@ -6,6 +6,7 @@ import { command as searchCommand, noteUrlInfo } from './search.js';
 const MAX_EXCERPT_CHARS = 560;
 const SEARCH_OPERATION_TIMEOUT_SECONDS = 20;
 const SEARCH_OPERATION_ATTEMPTS = 2;
+const SEARCH_RECOVERY_TIMEOUT_SECONDS = 5;
 const DETAIL_OPERATION_TIMEOUT_SECONDS = 10;
 const DETAIL_READ_TIMEOUT_SECONDS = 15;
 // Leave headroom below OpenCLI's 60s command ceiling for detached tab cleanup.
@@ -118,6 +119,16 @@ function isBoundedTransportFailure(error) {
     return false;
 }
 
+async function discardFailedSearchPage(searchHandle) {
+    const failedPage = searchHandle.getActivePage();
+    if (!failedPage)
+        return false;
+    const cleanupHandle = boundedBrowserPage(searchHandle, SEARCH_RECOVERY_TIMEOUT_SECONDS);
+    cleanupHandle.setActivePage(failedPage);
+    await cleanupHandle.closeTab(failedPage);
+    return true;
+}
+
 async function acquireSearchRows(page, kwargs) {
     let lastTransportFailure;
     for (let attempt = 0; attempt < SEARCH_OPERATION_ATTEMPTS; attempt += 1) {
@@ -137,6 +148,10 @@ async function acquireSearchRows(page, kwargs) {
             if (!isBoundedTransportFailure(error))
                 throw error;
             lastTransportFailure = error;
+            if (attempt + 1 < SEARCH_OPERATION_ATTEMPTS &&
+                !await discardFailedSearchPage(searchHandle)) {
+                throw error;
+            }
         }
     }
     const timeout = new TimeoutError(
@@ -155,7 +170,7 @@ export const command = cli({
     description: '搜索小红书笔记并读取脱敏短摘录',
     domain: 'www.xiaohongshu.com',
     strategy: Strategy.COOKIE,
-    siteSession: 'persistent',
+    siteSession: 'ephemeral',
     navigateBefore: false,
     args: [
         { name: 'query', required: true, positional: true, help: 'Search keyword' },

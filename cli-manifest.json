@@ -45984,7 +45984,7 @@
     "modulePath": "xiaohongshu/search-notes.js",
     "sourceFile": "xiaohongshu/search-notes.js",
     "navigateBefore": false,
-    "siteSession": "persistent"
+    "siteSession": "ephemeral"
   },
   {
     "site": "xiaohongshu",

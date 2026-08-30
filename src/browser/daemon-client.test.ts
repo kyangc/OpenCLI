@@ -698,7 +698,7 @@ describe('daemon-client', () => {
     }
   });
 
-  it('a local command deadline also bounds the client HTTP request', async () => {
+  it('a local command deadline bounds the client HTTP request with narrow response headroom', async () => {
     vi.useFakeTimers();
     try {
       const fetchMock = vi.mocked(fetch);
@@ -719,7 +719,7 @@ describe('daemon-client', () => {
         code: 'command_result_unknown',
       } satisfies Partial<BrowserCommandError>);
 
-      await vi.advanceTimersByTimeAsync(19_999);
+      await vi.advanceTimersByTimeAsync(11_999);
       expect(aborted).toBe(false);
 
       await vi.advanceTimersByTimeAsync(1);
