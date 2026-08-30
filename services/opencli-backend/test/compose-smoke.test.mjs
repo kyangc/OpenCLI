@@ -24,6 +24,12 @@ for argument in "$@"; do
   if [ "$previous" = "--env-file" ]; then cp "$argument" "$SMOKE_ENV_COPY"; fi
   previous=$argument
 done
+case "$*" in
+  *" up -d --no-build"*)
+    runtime_root=$(sed -n 's/^OPENCLI_RUNTIME_ROOT=//p' "$SMOKE_ENV_COPY")
+    ls -ld "$runtime_root/data" "$runtime_root/opencli-state" >> "$SMOKE_CALL_LOG" 2>&1 || true
+    ;;
+esac
 `);
   await writeFile(path.join(fakeBin, 'node'), `#!/bin/sh
 printf 'node %s\\n' "$*" >> "$SMOKE_CALL_LOG"
@@ -48,6 +54,8 @@ printf 'node %s\\n' "$*" >> "$SMOKE_CALL_LOG"
     assert.match(calls, /docker compose .* up -d --no-build/);
     assert.match(calls, /node .*smoke-deployment\.mjs --base-url http:\/\/127\.0\.0\.1:28080 --expected-version 2\.0\.0/);
     assert.match(calls, /docker compose .* down --volumes --remove-orphans/);
+    assert.match(calls, /drwxrwxrwx .*\/data/);
+    assert.match(calls, /drwxrwxrwx .*\/opencli-state/);
     assert.match(environment, /^OPENCLI_SESSION_CHECK_SITES=disabled$/m);
     assert.doesNotMatch(environment, /xiaohongshu|twitter/);
   } finally {

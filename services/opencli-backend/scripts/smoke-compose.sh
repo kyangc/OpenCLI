@@ -36,6 +36,9 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+mkdir -p "$smoke_runtime/browser-config" "$smoke_runtime/data" "$smoke_runtime/opencli-state"
+chmod 0777 "$smoke_runtime/data" "$smoke_runtime/opencli-state"
+
 cat > "$smoke_env" <<EOF
 BIND_ADDRESS=127.0.0.1
 GUI_PORT=23001
