@@ -5,11 +5,47 @@ on:
     tags:
       - 'kyangc-v*'
 
-permissions:
-  contents: write
-
 jobs:
+  backend-contract:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            services/opencli-backend/package-lock.json
+
+      - name: Install OpenCLI dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install backend dependencies
+        run: npm ci --ignore-scripts --prefix services/opencli-backend
+
+      - name: Verify backend and OpenCLI contract
+        run: npm run verify:backend
+
+      - name: Audit backend production dependencies
+        run: npm audit --omit=dev --audit-level=high --prefix services/opencli-backend
+
+      - name: Render Compose configuration
+        run: docker compose --env-file services/opencli-backend/.env.example -f services/opencli-backend/compose.yaml config --quiet
+
+      - name: Build backend image from the tagged checkout
+        run: docker build --target backend -f services/opencli-backend/Dockerfile .
+
+      - name: Build Chromium image from the tagged checkout
+        run: docker build --target chromium -f services/opencli-backend/Dockerfile .
+
   release:
+    needs: backend-contract
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

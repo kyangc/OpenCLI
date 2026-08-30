@@ -1,0 +1,94 @@
+name: opencli-backend
+
+x-opencli-build: &opencli-build
+  context: ../..
+  dockerfile: services/opencli-backend/Dockerfile
+
+services:
+  chromium:
+    image: local/opencli-chromium:2.0.0.1
+    build:
+      <<: *opencli-build
+      target: chromium
+    container_name: opencli-chromium
+    environment:
+      PUID: ${PUID:-1026}
+      PGID: ${PGID:-100}
+      TZ: ${TZ:-America/Los_Angeles}
+      CUSTOM_USER: ${GUI_USER:-opencli}
+      FILE__PASSWORD: /run/secrets/gui_password
+      PIXELFLUX_WAYLAND: "false"
+      CHROME_CLI: --disable-background-mode --load-extension=/opt/opencli-extension
+      HARDEN_DESKTOP: "true"
+      NO_GAMEPAD: "true"
+      RESTART_APP: "true"
+      SELKIES_AUDIO_ENABLED: "false"
+      SELKIES_MICROPHONE_ENABLED: "false"
+      SELKIES_COMMAND_ENABLED: "false"
+      SELKIES_ENABLE_SHARING: "false"
+      SELKIES_ENABLE_COLLAB: "false"
+      SELKIES_ENABLE_SHARED: "false"
+      SELKIES_UI_SIDEBAR_SHOW_FILES: "false"
+      SELKIES_UI_SIDEBAR_SHOW_APPS: "false"
+      SELKIES_UI_SIDEBAR_SHOW_SHARING: "false"
+    volumes:
+      - "${OPENCLI_RUNTIME_ROOT:?set OPENCLI_RUNTIME_ROOT to the persistent backend directory}/browser-config:/config"
+    ports:
+      - "${BIND_ADDRESS:-192.168.50.10}:${GUI_PORT:-13001}:3001"
+      # backend shares this service's network namespace, so its port is published here.
+      - "${BIND_ADDRESS:-192.168.50.10}:${API_PORT:-18080}:8080"
+    secrets:
+      - gui_password
+    shm_size: 1gb
+    restart: unless-stopped
+
+  backend:
+    image: local/opencli-backend:2.0.0.1
+    build:
+      <<: *opencli-build
+      target: backend
+    container_name: opencli-backend
+    network_mode: service:chromium
+    depends_on:
+      chromium:
+        condition: service_started
+    environment:
+      HOME: /home/node
+      TZ: ${TZ:-America/Los_Angeles}
+      OPENCLI_API_TOKEN_FILE: /run/secrets/api_token
+      OPENCLI_AGENT_TOKENS_FILE: /run/secrets/agent_tokens
+      OPENCLI_ALLOWED_COMMANDS: ${OPENCLI_ALLOWED_COMMANDS:-hackernews.top,bilibili.hot,xiaohongshu.whoami,twitter.whoami}
+      OPENCLI_AUTO_ALLOW_READS: ${OPENCLI_AUTO_ALLOW_READS:-true}
+      OPENCLI_DENIED_ARGUMENTS: ${OPENCLI_DENIED_ARGUMENTS:-include-sensitive,token,password,secret,cookie}
+      OPENCLI_MAX_CONCURRENCY: ${OPENCLI_MAX_CONCURRENCY:-2}
+      OPENCLI_MAX_QUEUED_JOBS: ${OPENCLI_MAX_QUEUED_JOBS:-100}
+      OPENCLI_MAX_SUBMISSIONS_PER_MINUTE: ${OPENCLI_MAX_SUBMISSIONS_PER_MINUTE:-60}
+      OPENCLI_MAX_WAIT_SECONDS: ${OPENCLI_MAX_WAIT_SECONDS:-120}
+      OPENCLI_DEFAULT_TIMEOUT_SECONDS: ${OPENCLI_DEFAULT_TIMEOUT_SECONDS:-120}
+      OPENCLI_MAX_TIMEOUT_SECONDS: ${OPENCLI_MAX_TIMEOUT_SECONDS:-1800}
+      OPENCLI_MAX_OUTPUT_BYTES: ${OPENCLI_MAX_OUTPUT_BYTES:-1048576}
+      OPENCLI_WATCHDOG_GRACE_SECONDS: ${OPENCLI_WATCHDOG_GRACE_SECONDS:-30}
+      OPENCLI_SESSION_CHECK_SITES: ${OPENCLI_SESSION_CHECK_SITES:-xiaohongshu,twitter}
+      OPENCLI_SESSION_CHECK_INTERVAL_SECONDS: ${OPENCLI_SESSION_CHECK_INTERVAL_SECONDS:-900}
+    volumes:
+      - "${OPENCLI_RUNTIME_ROOT:?set OPENCLI_RUNTIME_ROOT to the persistent backend directory}/data:/data"
+      - "${OPENCLI_RUNTIME_ROOT:?set OPENCLI_RUNTIME_ROOT to the persistent backend directory}/opencli-state:/home/node/.opencli"
+    secrets:
+      - api_token
+      - agent_tokens
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+
+secrets:
+  api_token:
+    file: "${OPENCLI_RUNTIME_ROOT:?set OPENCLI_RUNTIME_ROOT to the persistent backend directory}/secrets/api_token"
+  agent_tokens:
+    file: "${OPENCLI_RUNTIME_ROOT:?set OPENCLI_RUNTIME_ROOT to the persistent backend directory}/secrets/agent_tokens.json"
+  gui_password:
+    file: "${OPENCLI_RUNTIME_ROOT:?set OPENCLI_RUNTIME_ROOT to the persistent backend directory}/secrets/gui_password"
