@@ -11,7 +11,7 @@ import {
   setDaemonCommandTimeoutSeconds,
   setDaemonRunContext,
 } from './daemon-client.js';
-import { SessionBusyError } from '../errors.js';
+import { SessionBusyError, toEnvelope } from '../errors.js';
 import * as daemonLifecycle from './daemon-lifecycle.js';
 
 describe('daemon-client', () => {
@@ -387,6 +387,78 @@ describe('daemon-client', () => {
       return body.id;
     });
     expect(ids[0]).not.toBe(ids[1]);
+  });
+
+  it('sendCommand retries an evicted read result once with a NEW id', async () => {
+    mockEnsureReady('1.0.22');
+    const reset = new TypeError('fetch failed');
+    (reset as { cause?: unknown }).cause = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockRejectedValueOnce(reset)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 200,
+        json: () => Promise.resolve({
+          id: 'server',
+          ok: false,
+          errorCode: 'result_evicted',
+          error: 'Command already executed, but its result was too large to record for replay.',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ id: 'server', ok: true, data: 'fresh result' }),
+      } as Response);
+
+    await expect(sendCommand('exec', { code: 'loadTimeline()', access: 'read' })).resolves.toBe('fresh result');
+
+    const ids = fetchMock.mock.calls.map(([, init]) => (JSON.parse(String(init?.body)) as { id: string }).id);
+    expect(ids).toHaveLength(3);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[2]).not.toBe(ids[1]);
+  });
+
+  it('sendCommand does NOT retry an evicted write result with a new id', async () => {
+    mockEnsureReady('1.0.22');
+    const reset = new TypeError('fetch failed');
+    (reset as { cause?: unknown }).cause = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockRejectedValueOnce(reset)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 200,
+        json: () => Promise.resolve({
+          id: 'server',
+          ok: false,
+          errorCode: 'result_evicted',
+          error: 'Command already executed, but its result was too large to record for replay.',
+        }),
+      } as Response);
+
+    await expect(sendCommand('exec', { code: 'submit()', access: 'write' })).rejects.toMatchObject({
+      name: 'BrowserCommandError',
+      code: 'result_evicted',
+    } satisfies Partial<BrowserCommandError>);
+
+    const ids = fetchMock.mock.calls.map(([, init]) => (JSON.parse(String(init?.body)) as { id: string }).id);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).toBe(ids[1]);
+  });
+
+  it('preserves browser command codes and hints in the structured error envelope', () => {
+    const envelope = toEnvelope(new BrowserCommandError(
+      'Command already executed, but its result was too large to record for replay.',
+      'result_evicted',
+      'Inspect state before retrying.',
+    ));
+
+    expect(envelope.error).toMatchObject({
+      code: 'result_evicted',
+      help: 'Inspect state before retrying.',
+    });
   });
 
   it('sendCommand does NOT retry mid-execution failures (detached_mid_command) — outcome is unknown', async () => {

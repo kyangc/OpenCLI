@@ -5,7 +5,7 @@
  */
 
 import { sleep } from '../utils.js';
-import { BrowserConnectError, SessionBusyError } from '../errors.js';
+import { BrowserConnectError, CliError, SessionBusyError } from '../errors.js';
 import { COMMAND_RESULT_UNKNOWN_CODE, COMMAND_RESULT_UNKNOWN_HINT } from '../daemon-utils.js';
 import { classifyBrowserError } from './errors.js';
 import { profileRouteParams, resolveProfileSelection } from './profile.js';
@@ -297,15 +297,14 @@ export interface DaemonResult {
   page?: string;
 }
 
-export class BrowserCommandError extends Error {
+export class BrowserCommandError extends CliError {
   constructor(
     message: string,
-    readonly code?: string,
-    readonly hint?: string,
+    code: string = 'BROWSER_COMMAND',
+    hint?: string,
     readonly teardown?: unknown,
   ) {
-    super(message);
-    this.name = 'BrowserCommandError';
+    super(code, message, hint);
   }
 }
 
@@ -336,9 +335,10 @@ export {
  * errors that happened before any page code ran (`attach_failed`/`tab_gone`).
  * `target_navigated` is the page layer's decision, not ours.
  *
- * Never retried: `command_result_unknown` / `command_lost` / `result_evicted`
- * (the outcome is genuinely unknown) and client-side AbortError (the shared
- * deadline is already exhausted).
+ * Never retried: `command_result_unknown` / `command_lost`, write-command
+ * `result_evicted` (the outcome is genuinely unknown), and client-side
+ * AbortError (the shared deadline is already exhausted). A read command may
+ * retry `result_evicted` once with a new id because re-execution is safe.
  */
 async function sendCommandRaw(
   action: DaemonCommand['action'],
@@ -429,6 +429,12 @@ async function sendCommandRaw(
       // retried, and surfaced as a CliError so the busy message is the output.
       if (result.errorCode === 'session_busy') {
         throw new SessionBusyError(result.error ?? 'The site session is busy.', result.errorHint);
+      }
+
+      if (result.errorCode === 'result_evicted' && params.access === 'read' && !semanticRetryUsed) {
+        semanticRetryUsed = true;
+        id = generateId();
+        continue;
       }
 
       if (result.errorCode && UNKNOWN_OUTCOME_CODES.has(result.errorCode)) {
