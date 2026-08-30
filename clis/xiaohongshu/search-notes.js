@@ -4,7 +4,8 @@ import { command as noteCommand } from './note.js';
 import { command as searchCommand, noteUrlInfo } from './search.js';
 
 const MAX_EXCERPT_CHARS = 560;
-const SEARCH_OPERATION_TIMEOUT_SECONDS = 30;
+const SEARCH_OPERATION_TIMEOUT_SECONDS = 20;
+const SEARCH_OPERATION_ATTEMPTS = 2;
 const DETAIL_OPERATION_TIMEOUT_SECONDS = 10;
 const DETAIL_READ_TIMEOUT_SECONDS = 15;
 // Leave headroom below OpenCLI's 60s command ceiling for detached tab cleanup.
@@ -117,6 +118,36 @@ function isBoundedTransportFailure(error) {
     return false;
 }
 
+async function acquireSearchRows(page, kwargs) {
+    let lastTransportFailure;
+    for (let attempt = 0; attempt < SEARCH_OPERATION_ATTEMPTS; attempt += 1) {
+        const searchHandle = boundedBrowserPage(page, SEARCH_OPERATION_TIMEOUT_SECONDS);
+        try {
+            const searchRows = await searchCommand.func(searchHandle, {
+                query: kwargs.query,
+                limit: kwargs.limit,
+            });
+            return {
+                searchHandle,
+                searchPage: requireActivePage(searchHandle),
+                searchRows,
+            };
+        }
+        catch (error) {
+            if (!isBoundedTransportFailure(error))
+                throw error;
+            lastTransportFailure = error;
+        }
+    }
+    const timeout = new TimeoutError(
+        'xiaohongshu search phase',
+        SEARCH_OPERATION_TIMEOUT_SECONDS * SEARCH_OPERATION_ATTEMPTS,
+        'The search page did not respond after one bounded transport retry.',
+    );
+    timeout.cause = lastTransportFailure;
+    throw timeout;
+}
+
 export const command = cli({
     site: 'xiaohongshu',
     name: 'search-notes',
@@ -141,25 +172,7 @@ export const command = cli({
     ],
     func: async (page, kwargs) => {
         const captureDeadlineAt = Date.now() + CAPTURE_BATCH_TIMEOUT_SECONDS * 1000;
-        const searchHandle = boundedBrowserPage(page, SEARCH_OPERATION_TIMEOUT_SECONDS);
-        let searchRows;
-        try {
-            searchRows = await searchCommand.func(searchHandle, {
-                query: kwargs.query,
-                limit: kwargs.limit,
-            });
-        }
-        catch (error) {
-            if (isBoundedTransportFailure(error)) {
-                throw new TimeoutError(
-                    'xiaohongshu search phase',
-                    SEARCH_OPERATION_TIMEOUT_SECONDS,
-                    'The search page did not respond within its local browser-operation budget.',
-                );
-            }
-            throw error;
-        }
-        const searchPage = requireActivePage(searchHandle);
+        const { searchHandle, searchPage, searchRows } = await acquireSearchRows(page, kwargs);
         const captures = [];
         for (const [index, row] of searchRows.entries()) {
             const canonicalUrl = canonicalNoteUrl(row.url);

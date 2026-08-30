@@ -135,6 +135,32 @@ function pageWithStalledMiddleNote() {
     return page;
 }
 
+function pageWithRecoverableSearchTransportStall() {
+    const page = pageWithOneNote();
+    let searchAttempt = 0;
+    page.withCommandTimeout = vi.fn((seconds) => {
+        if (seconds <= 10)
+            return page;
+        searchAttempt += 1;
+        return {
+            ...page,
+            withCommandTimeout: page.withCommandTimeout,
+            goto: vi.fn((url) => {
+                if (url.includes('/search_result?') && searchAttempt === 1) {
+                    return new Promise((_, reject) => {
+                        setTimeout(() => reject(Object.assign(
+                            new Error('local browser command deadline expired'),
+                            { code: 'command_result_unknown' },
+                        )), seconds * 1000);
+                    });
+                }
+                return page.goto(url);
+            }),
+        };
+    });
+    return page;
+}
+
 describe('xiaohongshu search-notes', () => {
     it('publishes a narrow read-only persistent-session interface', () => {
         expect(command).toMatchObject({
@@ -300,7 +326,6 @@ describe('xiaohongshu search-notes', () => {
                     expect.objectContaining({ rank: 3, capture_status: 'captured', excerpt: '第三篇正文' }),
                 ],
             });
-            expect(page.withCommandTimeout).toHaveBeenCalledWith(30);
             expect(page.withCommandTimeout).toHaveBeenCalledWith(10);
         }
         finally {
@@ -376,9 +401,38 @@ describe('xiaohongshu search-notes', () => {
         }
     });
 
+    it('recovers one stalled search transport while time remains for note capture', async () => {
+        vi.useFakeTimers();
+        try {
+            const page = pageWithRecoverableSearchTransportStall();
+            const settled = vi.fn();
+            void command.func(page, {
+                query: '里斯本 雨天安排',
+                limit: 1,
+            }).then(
+                (value) => settled({ status: 'fulfilled', value }),
+                (reason) => settled({ status: 'rejected', reason }),
+            );
+
+            await vi.advanceTimersByTimeAsync(20_000);
+
+            expect(settled).toHaveBeenCalledOnce();
+            expect(settled.mock.calls[0][0]).toEqual({
+                status: 'fulfilled',
+                value: [expect.objectContaining({
+                    rank: 1,
+                    capture_status: 'captured',
+                })],
+            });
+        }
+        finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('fails the batch with a typed timeout when the search phase transport expires', async () => {
         const page = pageWithOneNote();
-        page.goto.mockRejectedValueOnce(Object.assign(
+        page.goto.mockRejectedValue(Object.assign(
             new Error('local browser command deadline expired'),
             { code: 'command_result_unknown' },
         ));
@@ -386,7 +440,10 @@ describe('xiaohongshu search-notes', () => {
         await expect(command.func(page, {
             query: '里斯本 雨天安排',
             limit: 3,
-        })).rejects.toMatchObject({ code: 'TIMEOUT' });
+        })).rejects.toMatchObject({
+            code: 'TIMEOUT',
+            message: 'xiaohongshu search phase timed out after 40s',
+        });
     });
 
     it('propagates login loss without exposing the signed URL', async () => {
