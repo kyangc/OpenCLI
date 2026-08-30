@@ -16,10 +16,23 @@ if (!fs.existsSync(path.join(_pkgDir, 'package.json'))) {
 }
 const pkgJsonPath = path.join(_pkgDir, 'package.json');
 
-export const PKG_VERSION: string = (() => {
+interface PackageMetadata {
+  version?: unknown;
+  opencliFork?: {
+    release?: unknown;
+  };
+}
+
+const packageMetadata: PackageMetadata = (() => {
   try {
-    return JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8')).version;
+    return JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8')) as PackageMetadata;
   } catch {
-    return '0.0.0';
+    return {};
   }
 })();
+
+export const PKG_VERSION = typeof packageMetadata.version === 'string'
+  ? packageMetadata.version
+  : '0.0.0';
+
+export const IS_FORK_BUILD = typeof packageMetadata.opencliFork?.release === 'string';
