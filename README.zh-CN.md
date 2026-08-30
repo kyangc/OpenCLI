@@ -5,9 +5,16 @@
 > 或者在任意页面上跑 Browser Use —— 导航、填表单、点击、抓取、自动化。
 
 [![English](https://img.shields.io/badge/docs-English-1D4ED8?style=flat-square)](./README.md)
-[![npm](https://img.shields.io/npm/v/@jackwener/opencli?style=flat-square)](https://www.npmjs.com/package/@jackwener/opencli)
-[![Node.js Version](https://img.shields.io/node/v/@jackwener/opencli?style=flat-square)](https://nodejs.org)
-[![License](https://img.shields.io/npm/l/@jackwener/opencli?style=flat-square)](./LICENSE)
+[![Fork release](https://img.shields.io/github/v/release/kyangc/OpenCLI?filter=kyangc-v*&style=flat-square&label=fork)](https://github.com/kyangc/OpenCLI/releases)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.18.1-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](./LICENSE)
+
+> [!IMPORTANT]
+> 这是 [jackwener/opencli](https://github.com/jackwener/opencli) 的
+> **kyangc 生产 fork**。请从本仓库安装 fork release，不要把 npm 或上游
+> Chrome Web Store 当作 fork 的发布源。当前版本线为 CLI `2.0.0`
+>（`kyangc-v2.0.0`）和扩展 `2.0.0`（`kyangc-ext-v2.0.0`），对应的上游基线
+> 分别是 `1.8.7` 和扩展 `1.0.23`。
 
 OpenCLI 可以用同一套 CLI 做三类事情：
 
@@ -17,37 +24,71 @@ OpenCLI 可以用同一套 CLI 做三类事情：
 
 除了网站能力，OpenCLI 还是一个 **CLI 枢纽**：你可以把 `gh`、`docker`、`longbridge`、`tg`、`discord`、`wx`、`ntn`（Notion）等本地工具统一注册到 `opencli` 下，也可以通过桌面端适配器控制 Cursor、Trae CN、Codex、Antigravity、ChatGPT、Trae SOLO 等 Electron 应用。
 
+## 这个 fork 做了什么
+
+这个 fork 保留上游 OpenCLI 的命令能力，重点补强浏览器型 Provider 在本机或
+远端长期运行的 headed Chrome 中的可靠性。
+
+| 范围 | Fork 行为 |
+|------|-----------|
+| 浏览器操作生命周期 | 所有一次性浏览器型 adapter 都经过同一个、与 Provider 无关的 Browser Operation 边界，拥有唯一 operation ID、deadline/取消传播和 tab lease。 |
+| 可核验清理 | 任务结束时阻止迟到命令、解除 debugger、关闭自己拥有的 tab、释放 lease，并返回 teardown receipt。receipt 不完整会明确报错，不再静默“尽力清理”。 |
+| 全量 inventory | 同一个公共模块可返回所选 Chrome profile 中经过净化的 window、tab 和 lease 清单，让泄漏可观测，同时不暴露页面正文。 |
+| 持久会话 | 明确声明为 persistent 的站点会话保留站点 tab 和登录连续性。清理只针对失败的一次性 operation，不误关其他持久会话或用户自己的 tab。 |
+| Chrome 资源复用 | browser 命令与 adapter 使用分开的受管 tab group/window；空的自动化容器可以复用，避免无意义地不断新建 window。 |
+| 小红书可靠性 | 小红书搜索是第一组生产压力测试：对 hydration/acquisition、笔记批次和总墙钟时间设上限，支持取消、一次有界重试、不可用/重复筛选项处理以及失败搜索 tab 回收；这些能力没有做成 Provider 特例。 |
+| 发布安全 | CLI 与 MV3 扩展使用独立 fork 版本；release 提供带版本的构件与校验和，service worker 文件名带版本，发布 Gate 会把 CLI 与扩展一起测试。 |
+| 真实浏览器 Gate | 面向 `stable` 的浏览器/扩展生命周期改动在 Linux 上运行合成 daemon + MV3 扩展 + 真实 headed Chrome 的 teardown 测试，并在 Linux、macOS、Windows 上运行 daemon transport 合约测试。 |
+
+清理边界只拥有 OpenCLI 创建的 lease 和 tab。它**不会**杀掉 Chrome、删除
+浏览器 profile，也不会关闭任意用户 tab。关闭 operation 自己的 tab 会停止该
+页面活动；renderer 进程本身最终仍由 Chrome 回收。
+
 ## 快速开始
 
-### 1. 安装 OpenCLI
+### 1. 安装 fork CLI
 
-如果你是在自己的电脑上使用，优先安装 **OpenCLIApp**。它会内置
-OpenCLI runtime，帮你安装 / 修复受管理的 `opencli` 命令，并提供系统托盘
-UI 来做环境诊断、更新、浏览器登录态保活和网页转 Markdown。
+OpenCLI 要求 **Node.js >= 20.18.1**。从本 fork 的 [最新 GitHub
+Release](https://github.com/kyangc/OpenCLI/releases/latest) 下载 CLI tarball
+和 `SHA256SUMS`，校验后安装到 release 独立目录：
 
-**方式 A — OpenCLIApp（macOS / Windows 推荐）：**
-从 <https://opencli.info/download> 下载最新版 App，安装后打开一次，在
-System 页面安装或修复 `opencli` 命令。
-
-**方式 B — npm 全局安装（纯 CLI / CI / 服务器）：**
-通过 npm 安装时，OpenCLI 要求 **Node.js >= 20.18.1**。
+下面命令适用于 macOS/Linux。Windows 也应使用同一个 tarball 和显式的
+release 独立 npm prefix，再把该 prefix 加入 `PATH`；不要按包名安装 registry
+版本。
 
 ```bash
 node --version
-npm install -g @jackwener/opencli
+grep 'jackwener-opencli-2.0.0.tgz$' SHA256SUMS | sha256sum -c -
+# macOS：把管道后的命令换成 `shasum -a 256 -c -`
+
+OPENCLI_RELEASE=kyangc-v2.0.0
+OPENCLI_PREFIX="$HOME/.local/share/opencli/releases/$OPENCLI_RELEASE/runtime"
+npm install --prefix "$OPENCLI_PREFIX" --global ./jackwener-opencli-2.0.0.tgz
+mkdir -p "$HOME/.local/bin"
+ln -sfn "$OPENCLI_PREFIX/bin/opencli" "$HOME/.local/bin/opencli"
+opencli --version
 ```
+
+请确保 `~/.local/bin` 排在 npm 全局 bin 目录之前。这个 fork **不要**用
+`npm install -g @jackwener/opencli` 安装：该包名只是为了兼容上游 adapter /
+plugin import，npm registry 里的上游包可能覆盖 fork runtime。完整目录布局见
+[fork 发布与回滚说明](./docs/kyangc-release.md)。
 
 ### 2. 安装 Browser Bridge 扩展
 
 OpenCLI 通过轻量 Browser Bridge 扩展和本地微型 daemon 与 Chrome/Chromium 通信。daemon 会按需自动启动。
 
-**方式 A — Chrome Web Store（推荐）：**
-在 [Chrome Web Store](https://chromewebstore.google.com/detail/opencli/ildkmabpimmkaediidaifkhjpohdnifk) 安装 **OpenCLI** 扩展。
+1. 从本 fork 的 [Releases 页面](https://github.com/kyangc/OpenCLI/releases)
+   下载匹配的 `opencli-extension-v2.0.0.zip`。
+2. 用同一 release 的 `SHA256SUMS` 校验后，解压到固定目录，例如
+   `~/.local/share/opencli/browser-extension/current`。
+3. 打开 `chrome://extensions`，启用**开发者模式**，点击**加载已解压的扩展程序**，
+   选择这个固定目录。
+4. 后续替换扩展文件后，需要在扩展页面点击**重新加载**；只更新磁盘文件不会
+   更新 Chrome 已经加载的 MV3 worker。
 
-**方式 B — 手动安装：**
-1. 到 GitHub [Releases 页面](https://github.com/jackwener/opencli/releases) 下载最新的 `opencli-extension-v{version}.zip`。
-2. 解压后打开 `chrome://extensions`，启用 **开发者模式**。
-3. 点击 **加载已解压的扩展程序**，选择解压后的目录。
+上游 Chrome Web Store 构件不包含这个 fork 的完整发布生命周期。需要可核验
+teardown 时，请使用版本匹配的 fork ZIP。
 
 ### 3. 验证环境
 
@@ -91,18 +132,18 @@ OpenCLI 的 browser 命令是给 AI Agent 用的——不是手动执行的。�
 ### 安装 skill（同时也用于更新）
 
 ```bash
-npx skills add jackwener/opencli
+npx skills add kyangc/OpenCLI
 ```
 
 或只装需要的 skill：
 
 ```bash
-npx skills add jackwener/opencli --skill opencli-adapter-author
-npx skills add jackwener/opencli --skill opencli-autofix
-npx skills add jackwener/opencli --skill opencli-browser
-npx skills add jackwener/opencli --skill opencli-browser-sitemap
-npx skills add jackwener/opencli --skill opencli-sitemap-author
-npx skills add jackwener/opencli --skill opencli-usage
+npx skills add kyangc/OpenCLI --skill opencli-adapter-author
+npx skills add kyangc/OpenCLI --skill opencli-autofix
+npx skills add kyangc/OpenCLI --skill opencli-browser
+npx skills add kyangc/OpenCLI --skill opencli-browser-sitemap
+npx skills add kyangc/OpenCLI --skill opencli-sitemap-author
+npx skills add kyangc/OpenCLI --skill opencli-usage
 ```
 
 ### 选择哪个 skill
@@ -155,8 +196,9 @@ Agent 在内部自动处理所有 `opencli browser` 命令——你只需用自�
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
+| `OPENCLI_PROFILE` | — | 多个 Chrome profile 同时连接时，要使用的 Browser Bridge profile alias/contextId |
 | `OPENCLI_WINDOW` | 命令默认值 | 设为 `foreground` 或 `background` 来覆盖 Browser Bridge 窗口位置。浏览器型命令也支持 `--window <foreground\|background>` |
-| `OPENCLI_SITE_SESSION` | adapter 默认值 | 设为 `ephemeral` 或 `persistent`，覆盖浏览器型 adapter 命令的 `siteSession` 元数据。`ephemeral` 会在命令结束时关闭一次性自动化窗口；`persistent` 会复用该站点的 session。命令级 `--site-session` 优先。 |
+| `OPENCLI_SITE_SESSION` | adapter 默认值 | 设为 `ephemeral` 或 `persistent`，覆盖浏览器型 adapter 命令的 `siteSession` 元数据。`ephemeral` 会关闭 operation 自己的 tab 并释放 lease；`persistent` 会复用该站点的 tab/session。命令级 `--site-session` 优先。 |
 | `OPENCLI_BROWSER_CONNECT_TIMEOUT` | `45` | 浏览器连接超时（秒） |
 | `OPENCLI_BROWSER_COMMAND_TIMEOUT` | `60` | 单个浏览器命令超时（秒） |
 | `OPENCLI_CDP_ENDPOINT` | — | Chrome DevTools Protocol 端点，用于远程浏览器或 Electron 应用 |
@@ -166,7 +208,22 @@ Agent 在内部自动处理所有 `opencli browser` 命令——你只需用自�
 
 Browser Bridge daemon 与扩展的通信端口固定为 `localhost:19825`，不再支持通过 `OPENCLI_DAEMON_PORT` 配置自定义端口。
 
-`opencli browser *` 必须紧跟一个 `<session>` 位置参数，默认使用前台窗口，并保留该 session 的 tab lease，直到你手动执行 `opencli browser <session> close` 或等空闲超时。浏览器型 adapter 默认使用后台 adapter 窗口并在命令结束后释放一次性 tab lease；如果需要调试最终页面，可以传 `--window foreground --keep-tab true`。
+### 浏览器资源生命周期
+
+| 工作类型 | 默认生命周期 | 结束时的行为 |
+|----------|--------------|--------------|
+| `opencli browser <session> ...` | 持久交互 lease | 保留选中的 tab，直到执行 `opencli browser <session> close` 或空闲回收。 |
+| 浏览器型 adapter | 一次性后台 operation | 无论成功、失败、超时还是取消，都关闭自己拥有的 operation tab、释放 lease，并核验 teardown receipt。 |
+| 声明 `siteSession: 'persistent'` 的 adapter | 持久站点 lease | 保留稳定站点 tab，延续登录态和工作流；需要一次性运行时可传 `--site-session ephemeral`。 |
+
+扩展始终在它被加载的那个 Chrome profile 中工作。如果扩展加载在一台通过 VNC
+观察的远端 headed Chrome 里，小红书、Twitter 和其他浏览器型 Provider 都使用
+这同一个 VNC 可见的 Chrome/profile；不同任务由 lease 隔离 tab 和生命周期。
+OpenCLI 不会为每个 Provider 偷偷启动一套 Chrome。
+
+一次性任务结束后，受管自动化容器可以有意保留一个空白 marker tab/window，
+供后续任务复用；这是有界基建，不是 Provider tab 泄漏。如果结果 tab、自动化
+window 持续累计，或者出现 `incomplete` teardown receipt，就属于清理失败。
 
 ## 内置命令
 
@@ -320,10 +377,47 @@ opencli plugin uninstall my-tool                            # 卸载
 
 详见 [插件指南](./docs/zh/guide/plugins.md) 了解如何创建自己的插件。
 
+## 测试
+
+Fork 发布 Gate 会核验 package metadata、TypeScript、unit/adapter/extension
+测试、两端 build 和扩展 release 构件：
+
+```bash
+npm ci
+npm ci --prefix extension
+TZ=Asia/Shanghai npm run verify:fork-release
+npm audit --omit=dev --audit-level=high
+npm audit --omit=dev --audit-level=high --prefix extension
+```
+
+面向 `stable` 且触及浏览器/扩展生命周期路径的 PR 还必须通过真实 headed
+Chrome Gate。Linux Gate 会启动隔离 daemon、构建后的 MV3 扩展、合成站点和
+Xvfb 下的 headed Chrome，证明超时的一次性 operation 会停止页面活动并从全量
+inventory 消失，同时保留无关的 persistent lease。完整测试矩阵见
+[TESTING.md](./TESTING.md)。
+
+## Fork 开发与发布
+
+- `main` 只做 `upstream/main` 的 fast-forward 镜像，不是生产 runtime 来源。
+- `stable` 是 fork 的生产事实源；候选 `codex/*` 分支和 PR 都以 `stable` 为目标。
+- CLI tag 使用 `kyangc-v<version>`。CLI 与扩展各有独立 semver；上游基线只记录
+  来源，不是 fork 版本权威。
+- npm 包名和 import 仍保留 `@jackwener/opencli`，只用于兼容 adapter/plugin
+  API。这个 fork 通过 GitHub release 构件分发，不覆盖上游 npm 包。
+- 每个 `kyangc-v*` release 都包含 CLI tarball、匹配的 unpacked 扩展 ZIP 和
+  `SHA256SUMS`。
+
+完整的上游同步、promotion、手工重载扩展和回滚步骤见
+[docs/kyangc-release.md](./docs/kyangc-release.md)。
+
 ## 常见问题排查
 
 - **"Extension not connected" 报错**
-  - 确保你已从 [Chrome Web Store](https://chromewebstore.google.com/detail/opencli/ildkmabpimmkaediidaifkhjpohdnifk) 安装 OpenCLI 扩展，且在 `chrome://extensions` 中**已启用**。
+  - 确保已加载并启用与 CLI release 匹配的 fork unpacked 扩展；替换磁盘文件后还要在 `chrome://extensions` 点击**重新加载**。
+- **CLI / 扩展版本看起来对不上**
+  - 执行 `opencli --version` 和 `opencli doctor`。后者会显示 daemon 和真正已连接的扩展版本；不能用磁盘上的文件版本推断 Chrome 当前加载的 MV3 版本。
+- **结果 tab 或 window 反复累计**
+  - 等命令进入结束态后检查 daemon/扩展日志。一个可复用的空白 automation marker 可以保留；无限增长的 Provider tab 或 incomplete teardown 不正常。
 - **"attach failed: Cannot access a chrome-extension:// URL" 报错**
   - 其他 Chrome/Chromium 扩展（如 youmind、New Tab Override 或 AI 助手类扩展）可能产生冲突。请尝试**暂时禁用其他扩展**后重试。
 - **返回空数据，或者报错 "Unauthorized"**
@@ -335,11 +429,11 @@ opencli plugin uninstall my-tool                            # 卸载
   - 查看扩展日志：`curl localhost:19825/logs`
 
 
-## Star History
+## 上游项目
 
-[![Star History Chart](https://star-history.dera.page/svg?repos=jackwener/opencli&type=Date)](https://star-history.dera.page/#jackwener/opencli&Date)
-
-
+OpenCLI 由 [jackwener/opencli](https://github.com/jackwener/opencli) 创建。这个 fork
+保留原项目署名，并通过上述 fork 发布流程定期把经过验证的上游快照合入
+`stable`。
 
 ## License
 

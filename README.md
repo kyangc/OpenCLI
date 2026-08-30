@@ -5,9 +5,17 @@
 > Or run Browser Use against any page — navigate, fill forms, click, extract, automate.
 
 [![中文文档](https://img.shields.io/badge/docs-%E4%B8%AD%E6%96%87-0F766E?style=flat-square)](./README.zh-CN.md)
-[![npm](https://img.shields.io/npm/v/@jackwener/opencli?style=flat-square)](https://www.npmjs.com/package/@jackwener/opencli)
-[![Node.js Version](https://img.shields.io/node/v/@jackwener/opencli?style=flat-square)](https://nodejs.org)
-[![License](https://img.shields.io/npm/l/@jackwener/opencli?style=flat-square)](./LICENSE)
+[![Fork release](https://img.shields.io/github/v/release/kyangc/OpenCLI?filter=kyangc-v*&style=flat-square&label=fork)](https://github.com/kyangc/OpenCLI/releases)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.18.1-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](./LICENSE)
+
+> [!IMPORTANT]
+> This repository is the **kyangc production fork** of
+> [jackwener/opencli](https://github.com/jackwener/opencli). Install fork
+> releases from this repository rather than npm or the upstream Chrome Web
+> Store. The current lines are CLI `2.0.0` (`kyangc-v2.0.0`) and extension
+> `2.0.0` (`kyangc-ext-v2.0.0`), based on upstream `1.8.7` / extension
+> `1.0.23`.
 
 OpenCLI gives you one surface for three different kinds of automation:
 
@@ -17,38 +25,76 @@ OpenCLI gives you one surface for three different kinds of automation:
 
 It also works as a **CLI hub** for local tools such as `gh`, `docker`, `longbridge`, `tg`, `discord`, `wx`, `ntn` (Notion), and other binaries you register yourself, plus **desktop app adapters** for Electron apps like Cursor, Trae CN, Codex, Antigravity, ChatGPT, and Trae SOLO.
 
+## What this fork changes
+
+This fork keeps the upstream OpenCLI command surface, but hardens the parts
+needed to run browser-backed Providers against a long-lived local or remote
+headed Chrome.
+
+| Area | Fork behavior |
+|------|---------------|
+| Browser operation lifecycle | Every ephemeral browser-backed adapter runs through one Provider-neutral operation boundary with a unique operation ID, deadline/cancellation propagation, and a tab lease. |
+| Verified cleanup | A terminal operation blocks late commands, detaches the debugger, closes its owned tab, releases its lease, and returns a teardown receipt. An incomplete receipt is an error rather than silent “best effort.” |
+| Full inventory | The same module can report sanitized windows, tabs, and leases for the selected Chrome profile, making leaks observable without exposing page content. |
+| Persistent sessions | Explicitly persistent site sessions keep their site tab and login continuity. Cleanup targets the failed ephemeral operation, not unrelated persistent or user-owned tabs. |
+| Chrome resource reuse | Browser commands and adapters use separate owned tab groups/windows. Empty automation container windows may be reused instead of creating an endless series of windows. |
+| Xiaohongshu reliability | Xiaohongshu search was the first production pressure test: bounded hydration/acquisition, cancellable note batches, one bounded stalled-read retry, unavailable/duplicate filter handling, and failed-search tab reclamation. These do not replace the common lifecycle with a Provider special case. |
+| Release safety | CLI and MV3 extension have independent fork versions, versioned release assets and checksums, a versioned service-worker filename, and a release gate that tests CLI + extension together. |
+| Real-browser gate | Browser/extension lifecycle changes targeting `stable` run synthetic daemon + MV3 extension + real headed Chrome teardown coverage on Linux, plus daemon transport contracts across Linux, macOS, and Windows. |
+
+The operation cleanup owns OpenCLI-created leases and tabs. It does **not**
+kill Chrome, delete a browser profile, or close arbitrary user tabs. Closing an
+owned tab stops its page activity; Chrome remains responsible for reclaiming
+the renderer process itself.
+
 ## Quick Start
 
-### 1. Install OpenCLI
+### 1. Install the fork CLI
 
-For desktop use, start with **OpenCLIApp**. It bundles the OpenCLI runtime,
-keeps the managed `opencli` command installed, and gives you a system tray UI
-for setup, diagnostics, updates, browser-login keepalive, and Web → Markdown.
+OpenCLI requires **Node.js >= 20.18.1**. Download the CLI tarball and
+`SHA256SUMS` from this fork's [latest GitHub
+release](https://github.com/kyangc/OpenCLI/releases/latest), verify the
+artifact, and install it into a release-specific prefix:
 
-**Option A — OpenCLIApp (recommended for macOS / Windows):**
-Download the latest app from <https://opencli.info/download>, install it, then
-open the app once and use the System page to install or repair the `opencli`
-command.
-
-**Option B — npm global install (CLI-only / CI / servers):**
-OpenCLI requires **Node.js >= 20.18.1** when installed through npm.
+The commands below target macOS/Linux. On Windows, install the same tarball
+with an explicit release-specific npm prefix and add that prefix to `PATH`;
+do not install the registry package by name.
 
 ```bash
 node --version
-npm install -g @jackwener/opencli
+grep 'jackwener-opencli-2.0.0.tgz$' SHA256SUMS | sha256sum -c -
+# macOS: use `shasum -a 256 -c -` after the pipe instead
+
+OPENCLI_RELEASE=kyangc-v2.0.0
+OPENCLI_PREFIX="$HOME/.local/share/opencli/releases/$OPENCLI_RELEASE/runtime"
+npm install --prefix "$OPENCLI_PREFIX" --global ./jackwener-opencli-2.0.0.tgz
+mkdir -p "$HOME/.local/bin"
+ln -sfn "$OPENCLI_PREFIX/bin/opencli" "$HOME/.local/bin/opencli"
+opencli --version
 ```
+
+Keep `~/.local/bin` before npm's global bin directory in `PATH`. Do **not** use
+`npm install -g @jackwener/opencli` for this fork: that package name remains an
+upstream/plugin compatibility surface and the npm registry can overwrite the
+fork runtime. See the [fork release and rollback guide](./docs/kyangc-release.md)
+for the full layout.
 
 ### 2. Install the Browser Bridge Extension
 
 OpenCLI connects to Chrome/Chromium through a lightweight Browser Bridge extension plus a small local daemon. The daemon auto-starts when needed.
 
-**Option A — Chrome Web Store (recommended):**
-Install **OpenCLI** from the [Chrome Web Store](https://chromewebstore.google.com/detail/opencli/ildkmabpimmkaediidaifkhjpohdnifk).
+1. Download the matching `opencli-extension-v2.0.0.zip` from this fork's
+   [Releases page](https://github.com/kyangc/OpenCLI/releases).
+2. Verify it against the release's `SHA256SUMS` and extract it to a fixed path,
+   such as `~/.local/share/opencli/browser-extension/current`.
+3. Open `chrome://extensions`, enable **Developer mode**, click **Load
+   unpacked**, and select that fixed directory.
+4. When replacing extension files later, click **Reload** on the extension.
+   Updating files on disk does not update Chrome's already-loaded MV3 worker.
 
-**Option B — Manual install:**
-1. Download the latest `opencli-extension-v{version}.zip` from the GitHub [Releases page](https://github.com/jackwener/opencli/releases).
-2. Unzip it, open `chrome://extensions`, and enable **Developer mode**.
-3. Click **Load unpacked** and select the unzipped folder.
+The upstream Chrome Web Store build does not include this fork's complete
+release lifecycle. Use the matching fork ZIP when verified teardown behavior
+is required.
 
 ### 3. Verify the setup
 
@@ -105,18 +151,18 @@ OpenCLI's browser commands are designed to be used by AI Agents — not run manu
 ### Install skills (also refreshes existing installs)
 
 ```bash
-npx skills add jackwener/opencli
+npx skills add kyangc/OpenCLI
 ```
 
 Or install only what you need:
 
 ```bash
-npx skills add jackwener/opencli --skill opencli-adapter-author
-npx skills add jackwener/opencli --skill opencli-autofix
-npx skills add jackwener/opencli --skill opencli-browser
-npx skills add jackwener/opencli --skill opencli-browser-sitemap
-npx skills add jackwener/opencli --skill opencli-sitemap-author
-npx skills add jackwener/opencli --skill opencli-usage
+npx skills add kyangc/OpenCLI --skill opencli-adapter-author
+npx skills add kyangc/OpenCLI --skill opencli-autofix
+npx skills add kyangc/OpenCLI --skill opencli-browser
+npx skills add kyangc/OpenCLI --skill opencli-browser-sitemap
+npx skills add kyangc/OpenCLI --skill opencli-sitemap-author
+npx skills add kyangc/OpenCLI --skill opencli-usage
 ```
 
 ### Which skill to use
@@ -171,7 +217,7 @@ When the site you need is not yet covered, use the `opencli-adapter-author` skil
 |----------|---------|-------------|
 | `OPENCLI_PROFILE` | — | Browser Bridge profile alias/contextId to use when multiple Chrome profiles are connected |
 | `OPENCLI_WINDOW` | command default | Set to `foreground` or `background` to override Browser Bridge window placement. Browser-backed commands also accept `--window <foreground\|background>`. |
-| `OPENCLI_SITE_SESSION` | adapter default | Set to `ephemeral` or `persistent` to override `siteSession` metadata for browser-backed adapter commands. `ephemeral` closes the one-shot automation window when the command finishes; `persistent` reuses the site's session. Per-command `--site-session` takes precedence. |
+| `OPENCLI_SITE_SESSION` | adapter default | Set to `ephemeral` or `persistent` to override `siteSession` metadata for browser-backed adapter commands. `ephemeral` closes the operation-owned tab and releases its lease; `persistent` reuses the site's tab/session. Per-command `--site-session` takes precedence. |
 | `OPENCLI_BROWSER_CONNECT_TIMEOUT` | `45` | Seconds to wait for browser connection |
 | `OPENCLI_BROWSER_COMMAND_TIMEOUT` | `60` | Seconds to wait for a single browser command |
 | `OPENCLI_CDP_ENDPOINT` | — | Chrome DevTools Protocol endpoint for remote browser or Electron apps |
@@ -179,7 +225,27 @@ When the site you need is not yet covered, use the `opencli-adapter-author` skil
 | `OPENCLI_VERBOSE` | `false` | Enable verbose logging (`-v` flag also works) |
 | `DEBUG_SNAPSHOT` | — | Set to `1` for DOM snapshot debug output |
 
-`opencli browser *` requires an explicit `<session>` positional, uses a foreground browser window by default, and keeps that session's tab lease until `opencli browser <session> close` or idle cleanup. Browser-backed adapters use a background adapter window and release one-shot tab leases by default. Interactive adapters can declare `siteSession: 'persistent'` to keep a stable site tab for continuity; pass `--site-session ephemeral` for a one-shot tab.
+Browser Bridge daemon/extension transport uses fixed `localhost:19825` and no
+longer supports a custom `OPENCLI_DAEMON_PORT`.
+
+### Browser resource lifecycle
+
+| Work type | Default lifecycle | Terminal behavior |
+|-----------|-------------------|-------------------|
+| `opencli browser <session> ...` | Persistent interactive lease | Keeps its selected tab until `opencli browser <session> close` or idle cleanup. |
+| Browser-backed adapter | Ephemeral background operation | Closes its owned operation tab, releases the lease, and verifies a teardown receipt on success, error, timeout, or cancellation. |
+| Adapter declaring `siteSession: 'persistent'` | Persistent site lease | Keeps a stable site tab for login/workflow continuity; use `--site-session ephemeral` when a one-shot run is desired. |
+
+The extension always operates inside the Chrome profile in which it is loaded.
+If that is a remote headed Chrome observed through VNC, Xiaohongshu, Twitter,
+and other browser-backed Providers all use that same VNC-visible Chrome/profile;
+leases separate their tabs and lifecycles. OpenCLI does not start one hidden
+Chrome process per Provider.
+
+The reusable automation container can intentionally remain as one blank marker
+tab/window after ephemeral work. That is bounded infrastructure, not a leaked
+Provider tab. A growing series of result tabs, duplicate automation windows, or
+an `incomplete` teardown receipt is a cleanup failure and should be reported.
 
 ## Built-in Commands
 
@@ -284,19 +350,56 @@ See [Plugins Guide](./docs/guide/plugins.md) for creating your own plugin.
 
 ## Testing
 
-See **[TESTING.md](./TESTING.md)** for how to run and write tests.
+The fork release gate verifies package metadata, TypeScript, unit/adapter/
+extension tests, both builds, and the extension release artifact:
+
+```bash
+npm ci
+npm ci --prefix extension
+TZ=Asia/Shanghai npm run verify:fork-release
+npm audit --omit=dev --audit-level=high
+npm audit --omit=dev --audit-level=high --prefix extension
+```
+
+PRs targeting `stable` that touch the browser/extension lifecycle paths also
+run the real headed-Chrome lifecycle gate. On Linux it launches an isolated
+daemon, the built MV3 extension, a synthetic site, and headed Chrome under
+Xvfb, then proves that a timed-out ephemeral operation stops page activity and
+disappears from full inventory while a persistent lease survives. See
+**[TESTING.md](./TESTING.md)** for the complete test matrix.
+
+## Fork development and releases
+
+- `main` is a fast-forward mirror of `upstream/main`; it is not a production
+  runtime source.
+- `stable` is the fork's production source of truth. Candidate `codex/*`
+  branches and PRs target `stable`.
+- CLI tags use `kyangc-v<version>`. The CLI and extension have independent
+  semver lines; their upstream bases are provenance, not version authorities.
+- The npm package/import name remains `@jackwener/opencli` only to preserve the
+  adapter/plugin API. This fork is distributed as GitHub release artifacts and
+  does not publish over the upstream npm package.
+- A `kyangc-v*` release contains the CLI tarball, matching unpacked extension
+  ZIP, and `SHA256SUMS`.
+
+The complete upstream-sync, promotion, manual extension reload, and rollback
+procedure is in [docs/kyangc-release.md](./docs/kyangc-release.md).
 
 ## Troubleshooting
 
-- **"Extension not connected"** — Ensure the Browser Bridge extension is installed from the [Chrome Web Store](https://chromewebstore.google.com/detail/opencli/ildkmabpimmkaediidaifkhjpohdnifk) and **enabled** in `chrome://extensions`.
+- **"Extension not connected"** — Ensure the unpacked extension from this fork's matching release is loaded and **enabled** in `chrome://extensions`; after replacing files, click **Reload**.
+- **CLI/extension version confusion** — Run `opencli --version` and `opencli doctor`. The latter reports the daemon and connected extension versions. Do not infer the loaded MV3 version from files on disk.
+- **Repeated result tabs or windows** — Let the command reach its terminal state, then inspect daemon/extension logs. One reusable blank automation marker may remain; unbounded Provider tabs or an incomplete teardown are not expected.
 - **"attach failed: Cannot access a chrome-extension:// URL"** — Another extension may be interfering. Try disabling other extensions temporarily.
 - **Empty data or 'Unauthorized' error** — Your Chrome/Chromium login session may have expired. Navigate to the target site and log in again.
 - **Node API errors / missing `fetch` / startup crash on old Node** — OpenCLI requires **Node.js >= 20.18.1**. Run `node --version`, upgrade Node if needed, then retry.
 - **Daemon issues** — Check status: `curl localhost:19825/status` · View logs: `curl localhost:19825/logs`
 
-## Star History
+## Upstream
 
-[![Star History Chart](https://star-history.dera.page/svg?repos=jackwener/opencli&type=Date)](https://star-history.dera.page/#jackwener/opencli&Date)
+OpenCLI was created by [jackwener/opencli](https://github.com/jackwener/opencli).
+This fork preserves attribution and periodically merges a verified upstream
+snapshot into `stable` through the fork release process above.
 
 ## License
 
