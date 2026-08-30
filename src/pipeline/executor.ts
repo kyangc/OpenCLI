@@ -27,32 +27,24 @@ export async function executePipeline(
   let data: unknown = null;
   const total = pipeline.length;
 
-  try {
-    for (let i = 0; i < pipeline.length; i++) {
-      const step = pipeline[i];
-      if (!step || typeof step !== 'object') continue;
-      for (const [op, params] of Object.entries(step)) {
-        if (debug) debugStepStart(i + 1, total, op, params);
+  for (let i = 0; i < pipeline.length; i++) {
+    const step = pipeline[i];
+    if (!step || typeof step !== 'object') continue;
+    for (const [op, params] of Object.entries(step)) {
+      if (debug) debugStepStart(i + 1, total, op, params);
 
-        const handler = getStep(op);
-        if (handler) {
-          data = await executeStepWithRetry(handler, page, params, data, args, op, ctx.stepRetries);
-        } else {
-          throw new ConfigError(
-            `Unknown pipeline step "${op}" at index ${i}.`,
-            'Check the YAML pipeline step name or register the custom step before execution.',
-          );
-        }
-
-        if (debug) debugStepResult(data);
+      const handler = getStep(op);
+      if (handler) {
+        data = await executeStepWithRetry(handler, page, params, data, args, op, ctx.stepRetries);
+      } else {
+        throw new ConfigError(
+          `Unknown pipeline step "${op}" at index ${i}.`,
+          'Check the YAML pipeline step name or register the custom step before execution.',
+        );
       }
+
+      if (debug) debugStepResult(data);
     }
-  } catch (err) {
-    // Attempt cleanup: release automation tab lease on pipeline failure.
-    if (page?.closeWindow) {
-      try { await page.closeWindow(); } catch { /* ignore */ }
-    }
-    throw err;
   }
   return data;
 }

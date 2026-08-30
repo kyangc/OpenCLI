@@ -94,6 +94,16 @@ jobs:
           xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" \
             npx vitest run --project e2e tests/e2e/browser-ax-chrome.test.ts --reporter=verbose
 
+      - name: Run browser operation teardown lifecycle (Linux, real extension via xvfb)
+        if: runner.os == 'Linux'
+        env:
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+          OPENCLI_BROWSER_OPERATION_E2E: '1'
+          OPENCLI_E2E_HEADED: '1'
+        run: |
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" \
+            npx vitest run --project e2e tests/e2e/browser-operation-chrome.test.ts --reporter=verbose
+
       # Transport contract E2E: real daemon process + scripted fake extension.
       # Pins the cross-layer contracts (waiter attach, deadline 408, dispatched
       # disconnect, profile fallback, graceful shutdown) end to end with the
@@ -106,6 +116,7 @@ jobs:
         if: runner.os == 'Linux'
         env:
           OPENCLI_AX_E2E: '0'
+          OPENCLI_BROWSER_OPERATION_E2E: '0'
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" \
             npx vitest run tests/e2e/ --reporter=verbose
@@ -116,4 +127,5 @@ jobs:
         if: runner.os == 'macOS'
         env:
           OPENCLI_AX_E2E: '0'
+          OPENCLI_BROWSER_OPERATION_E2E: '0'
         run: npx vitest run tests/e2e/ --reporter=verbose

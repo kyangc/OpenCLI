@@ -226,16 +226,11 @@ export class Page extends CDPBasePage {
 
   /** Release the current browser session lease in the extension */
   async closeWindow(): Promise<void> {
-    try {
-      await sendCommand('close-window', { ...this._sessionOpts() });
-    } catch {
-      // Window may already be closed or daemon may be down
-    } finally {
-      this._page = undefined;
-      this._lastUrl = null;
-      this._networkCaptureUnsupported = false;
-      this._networkCaptureWarned = false;
-    }
+    await sendCommand('close-window', { ...this._sessionOpts() });
+    this._page = undefined;
+    this._lastUrl = null;
+    this._networkCaptureUnsupported = false;
+    this._networkCaptureWarned = false;
   }
 
   async tabs(): Promise<unknown[]> {

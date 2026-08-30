@@ -965,6 +965,8 @@ const IDLE_TIMEOUT_DEFAULT = 3e4;
 const IDLE_TIMEOUT_INTERACTIVE = 6e5;
 const IDLE_TIMEOUT_NONE = -1;
 const REGISTRY_KEY = "opencli_target_lease_registry_v2";
+const CANCELLED_OPERATIONS_KEY = "opencli_cancelled_operations_v1";
+const CANCELLED_OPERATIONS_MAX = 128;
 const LEASE_IDLE_ALARM_PREFIX = "opencli:lease-idle:";
 const CONTAINER_TAB_GROUP_TITLE = {
   interactive: "OpenCLI Browser",
@@ -993,6 +995,7 @@ function setSessionOverride(key, patch) {
   sessionOverrides.set(key, { ...sessionOverrides.get(key), ...patch });
 }
 const activeCommandCounts = /* @__PURE__ */ new Map();
+const cancelledOperations = /* @__PURE__ */ new Map();
 const LEASE_KEY_SEPARATOR = "\0";
 function getLeaseKey(session, surface) {
   return `${surface}${LEASE_KEY_SEPARATOR}${encodeURIComponent(session)}`;
@@ -1029,6 +1032,36 @@ function getIdleTimeout(key) {
   if (adapterPersistent) return IDLE_TIMEOUT_NONE;
   if (overrides?.idleTimeoutMs !== void 0) return overrides.idleTimeoutMs;
   return getSurfaceFromKey(key) === "browser" ? IDLE_TIMEOUT_INTERACTIVE : IDLE_TIMEOUT_DEFAULT;
+}
+async function restoreCancelledOperations() {
+  try {
+    const stored = await chrome.storage.session.get(CANCELLED_OPERATIONS_KEY);
+    const entries = stored[CANCELLED_OPERATIONS_KEY];
+    if (!Array.isArray(entries)) return;
+    cancelledOperations.clear();
+    for (const entry of entries.slice(-CANCELLED_OPERATIONS_MAX)) {
+      if (!Array.isArray(entry) || typeof entry[0] !== "string" || typeof entry[1] !== "number") continue;
+      cancelledOperations.set(entry[0], entry[1]);
+    }
+  } catch {
+  }
+}
+async function markOperationCancelled(leaseKey) {
+  cancelledOperations.delete(leaseKey);
+  cancelledOperations.set(leaseKey, Date.now());
+  while (cancelledOperations.size > CANCELLED_OPERATIONS_MAX) {
+    const oldest = cancelledOperations.keys().next().value;
+    if (typeof oldest !== "string") break;
+    cancelledOperations.delete(oldest);
+  }
+  try {
+    await chrome.storage.session.set({
+      [CANCELLED_OPERATIONS_KEY]: [...cancelledOperations.entries()]
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 function getLeaseLifecycle(key, kind) {
   if (kind === "bound") return "pinned";
@@ -1683,6 +1716,7 @@ function initialize() {
   workerReady = (async () => {
     await getCurrentContextId();
     await reconcileTargetLeaseRegistry();
+    await restoreCancelledOperations();
   })().catch((err) => {
     console.warn(`[opencli] Startup recovery failed: ${err instanceof Error ? err.message : String(err)}`);
   }).finally(() => {
@@ -1743,6 +1777,13 @@ async function fetchDaemonVersion() {
   }
 }
 async function handleCommand(cmd) {
+  if (cmd.action === "inventory") {
+    try {
+      return { id: cmd.id, ok: true, data: await inventoryBrowser() };
+    } catch (err) {
+      return errorResult(cmd.id, err);
+    }
+  }
   const session = getSessionName(cmd.session);
   const surface = getCommandSurface(cmd);
   const leaseKey = getLeaseKey(session, surface);
@@ -1752,44 +1793,27 @@ async function handleCommand(cmd) {
   if (surface === "adapter" && (cmd.siteSession === "persistent" || cmd.siteSession === "ephemeral")) {
     setSessionOverride(leaseKey, { lifecycle: cmd.siteSession });
   }
+  if (cmd.action !== "operation-cancel" && cmd.action !== "close-window" && surface === "adapter" && cancelledOperations.has(leaseKey)) {
+    return {
+      id: cmd.id,
+      ok: false,
+      errorCode: "operation_cancelled",
+      error: `Browser operation "${session}" was cancelled and cannot accept more commands.`,
+      errorHint: "Start a new browser operation with a new operation id."
+    };
+  }
   if (cmd.idleTimeout != null && cmd.idleTimeout > 0) {
     setSessionOverride(leaseKey, { idleTimeoutMs: cmd.idleTimeout * 1e3 });
   }
   resetWindowIdleTimer(leaseKey);
   activeCommandCounts.set(leaseKey, (activeCommandCounts.get(leaseKey) ?? 0) + 1);
   try {
-    switch (cmd.action) {
-      case "exec":
-        return await handleExec(cmd, leaseKey);
-      case "navigate":
-        return await handleNavigate(cmd, leaseKey);
-      case "tabs":
-        return await handleTabs(cmd, leaseKey);
-      case "cookies":
-        return await handleCookies(cmd);
-      case "screenshot":
-        return await handleScreenshot(cmd, leaseKey);
-      case "close-window":
-        return await handleCloseWindow(cmd, leaseKey);
-      case "cdp":
-        return await handleCdp(cmd, leaseKey);
-      case "set-file-input":
-        return await handleSetFileInput(cmd, leaseKey);
-      case "insert-text":
-        return await handleInsertText(cmd, leaseKey);
-      case "bind":
-        return await handleBind(cmd, leaseKey);
-      case "network-capture-start":
-        return await handleNetworkCaptureStart(cmd, leaseKey);
-      case "network-capture-read":
-        return await handleNetworkCaptureRead(cmd, leaseKey);
-      case "wait-download":
-        return await handleWaitDownload(cmd);
-      case "frames":
-        return await handleFrames(cmd, leaseKey);
-      default:
-        return { id: cmd.id, ok: false, error: `Unknown action: ${cmd.action}` };
+    const result = await dispatchCommand(cmd, leaseKey);
+    if (cmd.surface === "adapter" && cmd.siteSession === "ephemeral" && result.errorCode === "cdp_timeout") {
+      const teardown = await teardownBrowserOperation(leaseKey, "operation CDP timeout");
+      return { ...result, teardown };
     }
+    return result;
   } catch (err) {
     return errorResult(cmd.id, err);
   } finally {
@@ -1797,6 +1821,105 @@ async function handleCommand(cmd) {
     if (remaining <= 0) activeCommandCounts.delete(leaseKey);
     else activeCommandCounts.set(leaseKey, remaining);
     resetWindowIdleTimer(leaseKey);
+  }
+}
+function sanitizeInventoryUrl(rawUrl) {
+  if (!rawUrl) return void 0;
+  if (rawUrl.startsWith("data:")) return "data:";
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return `${parsed.origin}${parsed.pathname}`;
+    }
+    if (parsed.protocol === "about:") return `${parsed.protocol}${parsed.pathname}`;
+    return void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function inventoryBrowser() {
+  const [windows, tabs] = await Promise.all([
+    chrome.windows.getAll(),
+    chrome.tabs.query({})
+  ]);
+  const leaseByTabId = /* @__PURE__ */ new Map();
+  const leases = [];
+  for (const session of automationSessions.values()) {
+    const page = session.preferredTabId === null ? void 0 : await resolveTargetId(session.preferredTabId).catch(() => void 0);
+    const lease = {
+      operationId: session.session,
+      surface: session.surface,
+      lifecycle: session.lifecycle,
+      ownership: session.ownership,
+      windowRole: session.windowRole,
+      ...page ? { page } : {}
+    };
+    leases.push(lease);
+    if (session.preferredTabId !== null) leaseByTabId.set(session.preferredTabId, lease);
+  }
+  const windowRole = (windowId) => {
+    if (ownedContainers.automation.windowId === windowId || [...automationSessions.values()].some((session) => session.owned && session.surface === "adapter" && session.windowId === windowId)) return "automation";
+    if (ownedContainers.interactive.windowId === windowId || [...automationSessions.values()].some((session) => session.owned && session.surface === "browser" && session.windowId === windowId)) return "interactive";
+    return "user";
+  };
+  return {
+    capturedAt: Date.now(),
+    contextId: currentContextId,
+    windows: windows.filter((window) => typeof window.id === "number").map((window) => ({
+      id: window.id,
+      focused: window.focused,
+      ...window.type ? { type: window.type } : {},
+      ...window.state ? { state: window.state } : {},
+      role: windowRole(window.id)
+    })),
+    tabs: await Promise.all(tabs.filter((tab) => typeof tab.windowId === "number").map(async (tab) => {
+      const page = tab.id === void 0 ? void 0 : await resolveTargetId(tab.id).catch(() => void 0);
+      const lease = tab.id === void 0 ? void 0 : leaseByTabId.get(tab.id);
+      return {
+        ...page ? { page } : {},
+        windowId: tab.windowId,
+        active: !!tab.active,
+        ...sanitizeInventoryUrl(tab.url) ? { url: sanitizeInventoryUrl(tab.url) } : {},
+        ...lease ? { lease } : {}
+      };
+    })),
+    leases
+  };
+}
+async function dispatchCommand(cmd, leaseKey) {
+  switch (cmd.action) {
+    case "exec":
+      return await handleExec(cmd, leaseKey);
+    case "navigate":
+      return await handleNavigate(cmd, leaseKey);
+    case "tabs":
+      return await handleTabs(cmd, leaseKey);
+    case "cookies":
+      return await handleCookies(cmd);
+    case "screenshot":
+      return await handleScreenshot(cmd, leaseKey);
+    case "close-window":
+      return await handleCloseWindow(cmd, leaseKey);
+    case "operation-cancel":
+      return await handleOperationCancel(cmd, leaseKey);
+    case "cdp":
+      return await handleCdp(cmd, leaseKey);
+    case "set-file-input":
+      return await handleSetFileInput(cmd, leaseKey);
+    case "insert-text":
+      return await handleInsertText(cmd, leaseKey);
+    case "bind":
+      return await handleBind(cmd, leaseKey);
+    case "network-capture-start":
+      return await handleNetworkCaptureStart(cmd, leaseKey);
+    case "network-capture-read":
+      return await handleNetworkCaptureRead(cmd, leaseKey);
+    case "wait-download":
+      return await handleWaitDownload(cmd);
+    case "frames":
+      return await handleFrames(cmd, leaseKey);
+    default:
+      return { id: cmd.id, ok: false, error: `Unknown action: ${cmd.action}` };
   }
 }
 const BLANK_PAGE = "about:blank";
@@ -2359,9 +2482,41 @@ function stripOpenCliFrameRoutingParams(params, stripFrameId) {
   return rest;
 }
 async function handleCloseWindow(cmd, leaseKey) {
-  const sessionName = automationSessions.get(leaseKey)?.session ?? getSessionFromKey(leaseKey);
+  const session = automationSessions.get(leaseKey);
+  const surface = session?.surface ?? getCommandSurface(cmd);
+  const lifecycle = session?.lifecycle ?? cmd.siteSession ?? (surface === "adapter" ? "ephemeral" : "persistent");
+  if (surface === "adapter" && lifecycle === "ephemeral") {
+    return handleOperationCancel(cmd, leaseKey);
+  }
+  const sessionName = session?.session ?? getSessionFromKey(leaseKey);
   await releaseLease(leaseKey, "explicit close");
   return { id: cmd.id, ok: true, data: { closed: true, session: sessionName } };
+}
+async function handleOperationCancel(cmd, leaseKey) {
+  const session = automationSessions.get(leaseKey);
+  const surface = session?.surface ?? getCommandSurface(cmd);
+  const lifecycle = session?.lifecycle ?? cmd.siteSession;
+  if (surface !== "adapter" || lifecycle !== "ephemeral") {
+    return {
+      id: cmd.id,
+      ok: false,
+      errorCode: "operation_not_ephemeral",
+      error: `Operation "${session?.session ?? getSessionFromKey(leaseKey)}" is not an ephemeral adapter operation.`,
+      errorHint: "Cancel only the ephemeral operation; keep persistent login/session leases intact."
+    };
+  }
+  const receipt = await teardownBrowserOperation(leaseKey, "explicit cancellation");
+  if (receipt.status === "incomplete") {
+    return {
+      id: cmd.id,
+      ok: false,
+      errorCode: "teardown_incomplete",
+      error: `Browser operation "${receipt.operationId}" teardown could not be verified.`,
+      data: receipt,
+      teardown: receipt
+    };
+  }
+  return { id: cmd.id, ok: true, data: receipt, teardown: receipt };
 }
 async function handleSetFileInput(cmd, leaseKey) {
   if (!cmd.files || !Array.isArray(cmd.files) || cmd.files.length === 0) {
@@ -2417,7 +2572,43 @@ async function handleWaitDownload(cmd) {
     return errorResult(cmd.id, err);
   }
 }
-async function releaseLease(leaseKey, reason = "released") {
+async function teardownBrowserOperation(leaseKey, reason) {
+  const startedAt = Date.now();
+  const session = automationSessions.get(leaseKey);
+  const operationId = session?.session ?? getSessionFromKey(leaseKey);
+  const surface = session?.surface ?? getSurfaceFromKey(leaseKey);
+  const tabId = session?.preferredTabId ?? null;
+  const targetPage = tabId === null ? void 0 : await resolveTargetId(tabId).catch(() => void 0);
+  const lateCommandsBlocked = await markOperationCancelled(leaseKey);
+  try {
+    await releaseLease(leaseKey, reason, true);
+  } catch {
+  }
+  let survivingPage;
+  if (tabId !== null) {
+    try {
+      await chrome.tabs.get(tabId);
+      survivingPage = await resolveTargetId(tabId).catch(() => targetPage);
+    } catch {
+    }
+  }
+  const leaseReleased = !automationSessions.has(leaseKey);
+  const survivingPages = survivingPage ? [survivingPage] : [];
+  return {
+    operationId,
+    contextId: session?.contextId ?? currentContextId,
+    surface,
+    reason,
+    status: lateCommandsBlocked && leaseReleased && survivingPages.length === 0 ? "verified" : "incomplete",
+    startedAt,
+    completedAt: Date.now(),
+    lateCommandsBlocked,
+    leaseReleased,
+    targetPages: targetPage ? [targetPage] : [],
+    survivingPages
+  };
+}
+async function releaseLease(leaseKey, reason = "released", strict = false) {
   const session = automationSessions.get(leaseKey);
   if (!session) {
     sessionOverrides.delete(leaseKey);
@@ -2430,6 +2621,15 @@ async function releaseLease(leaseKey, reason = "released") {
   if (session.owned) {
     const tabId = session.preferredTabId;
     if (tabId !== null) {
+      if (strict && getOwnedWindowRole(leaseKey) === "automation") {
+        await safeDetach(tabId);
+        await chrome.tabs.remove(tabId);
+        evictTab(tabId);
+        automationSessions.delete(leaseKey);
+        sessionOverrides.delete(leaseKey);
+        await persistRuntimeState();
+        return;
+      }
       const hasOtherOwnedLease = [...automationSessions.entries()].some(
         ([otherLease, otherSession]) => otherLease !== leaseKey && otherSession.owned && otherSession.windowId === session.windowId && otherSession.preferredTabId !== null
       );

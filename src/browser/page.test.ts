@@ -571,3 +571,29 @@ describe('Page.screenshot', () => {
     expect(args.fullPage).toBeUndefined();
   });
 });
+
+describe('Page.closeWindow', () => {
+  beforeEach(() => {
+    sendCommandMock.mockReset();
+    sendCommandFullMock.mockReset();
+    warnMock.mockReset();
+  });
+
+  it('does not hide a failed lease release or discard the active page identity', async () => {
+    sendCommandFullMock.mockResolvedValueOnce({ page: 'page-1', data: { url: 'https://example.com/' } });
+    sendCommandMock
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('teardown could not be verified'))
+      .mockResolvedValueOnce('still-active');
+    const page = new Page('operation-1', undefined, undefined, undefined, 'adapter', 'ephemeral');
+    await page.goto('https://example.com/', { waitUntil: 'none' });
+
+    await expect(page.closeWindow()).rejects.toThrow('teardown could not be verified');
+    await page.evaluate('document.title');
+
+    expect(sendCommandMock).toHaveBeenLastCalledWith('exec', expect.objectContaining({
+      session: 'operation-1',
+      page: 'page-1',
+    }));
+  });
+});

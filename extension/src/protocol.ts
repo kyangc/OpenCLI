@@ -1,8 +1,7 @@
 /**
  * opencli browser protocol — shared types between daemon, extension, and CLI.
  *
- * 5 actions: exec, navigate, tabs, cookies, screenshot.
- * Everything else is just JS code sent via 'exec'.
+ * Cross-layer actions and receipts shared by the daemon, extension, and CLI.
  */
 
 export type Action =
@@ -12,6 +11,8 @@ export type Action =
   | 'cookies'
   | 'screenshot'
   | 'close-window'
+  | 'operation-cancel'
+  | 'inventory'
   | 'sessions'
   | 'set-file-input'
   | 'insert-text'
@@ -112,9 +113,55 @@ export interface Result {
   errorCode?: string;
   /** Optional recovery hint for agent-facing CLI output */
   errorHint?: string;
+  /** Physical browser teardown evidence when an operation reaches a terminal state. */
+  teardown?: BrowserTeardownReceipt;
   /** Page identity (targetId) — present only on page-scoped command responses */
   page?: string;
 }
+
+export interface BrowserTeardownReceipt {
+  operationId: string;
+  contextId: string;
+  surface: 'browser' | 'adapter';
+  reason: string;
+  status: 'verified' | 'incomplete';
+  startedAt: number;
+  completedAt: number;
+  /** True only when the cancellation tombstone is durable across MV3 worker restarts. */
+  lateCommandsBlocked: boolean;
+  leaseReleased: boolean;
+  targetPages: string[];
+  survivingPages: string[];
+}
+
+export type BrowserInventoryLease = {
+  operationId: string;
+  surface: 'browser' | 'adapter';
+  lifecycle: 'ephemeral' | 'persistent' | 'pinned';
+  ownership: 'owned' | 'borrowed';
+  windowRole: 'interactive' | 'automation' | 'borrowed-user';
+  page?: string;
+};
+
+export type BrowserInventory = {
+  capturedAt: number;
+  contextId: string;
+  windows: Array<{
+    id: number;
+    focused: boolean;
+    type?: string;
+    state?: string;
+    role: 'interactive' | 'automation' | 'user';
+  }>;
+  tabs: Array<{
+    page?: string;
+    windowId: number;
+    active: boolean;
+    url?: string;
+    lease?: BrowserInventoryLease;
+  }>;
+  leases: BrowserInventoryLease[];
+};
 
 /** Default daemon port */
 export const DAEMON_PORT = 19825;

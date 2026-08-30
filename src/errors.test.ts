@@ -119,6 +119,28 @@ describe('toEnvelope', () => {
     expect(envelope.error.message).toBe('string error');
   });
 
+  it('preserves a browser teardown receipt in structured error output', () => {
+    const teardown = {
+      operationId: 'operation-1',
+      contextId: 'profile-1',
+      surface: 'adapter' as const,
+      reason: 'operation CDP timeout',
+      status: 'verified' as const,
+      startedAt: 1,
+      completedAt: 2,
+      lateCommandsBlocked: true,
+      leaseReleased: true,
+      targetPages: ['target-1'],
+      survivingPages: [],
+    };
+    const err = Object.assign(new Error('Runtime.evaluate timed out'), { teardown });
+
+    expect(toEnvelope(err)).toMatchObject({
+      ok: false,
+      teardown,
+    });
+  });
+
   it('serializes deep cause chains without stack overflow', () => {
     // Build a 20-level deep cause chain — should truncate at depth 10
     let deepErr: Error = new Error('root');

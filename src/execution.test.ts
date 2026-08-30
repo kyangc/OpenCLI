@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -11,7 +11,37 @@ import * as runtime from './runtime.js';
 import * as capRouting from './capabilityRouting.js';
 import * as daemonClient from './browser/daemon-client.js';
 import { BrowserCommandError } from './browser/daemon-client.js';
+import { BrowserOperation } from './browser/operation.js';
 import { clearAllHooks, onBeforeExecute } from './hooks.js';
+
+beforeEach(() => {
+  vi.spyOn(BrowserOperation.prototype, 'execute').mockImplementation(async (run, opts = {}) => {
+    const teardown = {
+      operationId: 'operation-test',
+      contextId: 'profile-test',
+      surface: 'adapter' as const,
+      reason: 'explicit cancellation',
+      status: 'verified' as const,
+      startedAt: 1,
+      completedAt: 2,
+      lateCommandsBlocked: true,
+      leaseReleased: true,
+      targetPages: [],
+      survivingPages: [],
+    };
+    try {
+      return {
+        result: await run(),
+        teardown: opts.retain ? null : teardown,
+      };
+    } catch (err) {
+      if (!opts.retain && err instanceof Error) {
+        (err as Error & { teardown?: typeof teardown }).teardown = teardown;
+      }
+      throw err;
+    }
+  });
+});
 
 afterEach(() => {
   clearAllHooks();
@@ -220,6 +250,9 @@ describe('executeCommand — non-browser timeout', () => {
     expect(sessionOpts[0]?.idleTimeout).toBeUndefined();
     expect(sessionOpts[1]?.idleTimeout).toBeUndefined();
     expect(closeWindow).not.toHaveBeenCalled();
+    expect(BrowserOperation.prototype.execute).toHaveBeenCalledTimes(2);
+    expect(BrowserOperation.prototype.execute).toHaveBeenNthCalledWith(1, expect.any(Function), { retain: true });
+    expect(BrowserOperation.prototype.execute).toHaveBeenNthCalledWith(2, expect.any(Function), { retain: true });
     vi.restoreAllMocks();
   });
 
@@ -254,8 +287,33 @@ describe('executeCommand — non-browser timeout', () => {
     expect(sessionOpts[1]?.idleTimeout).toBeUndefined();
     expect(sessionOpts[0]?.windowMode).toBe('background');
     expect(sessionOpts[1]?.windowMode).toBe('background');
-    expect(closeWindow).toHaveBeenCalledTimes(2);
+    expect(closeWindow).not.toHaveBeenCalled();
+    expect(BrowserOperation.prototype.execute).toHaveBeenCalledTimes(2);
+    expect(BrowserOperation.prototype.execute).toHaveBeenNthCalledWith(1, expect.any(Function), { retain: false });
+    expect(BrowserOperation.prototype.execute).toHaveBeenNthCalledWith(2, expect.any(Function), { retain: false });
     vi.restoreAllMocks();
+  });
+
+  it('routes one-shot execution and teardown through the Browser Operation Module', async () => {
+    const closeWindow = vi.fn().mockResolvedValue(undefined);
+    const mockPage = { closeWindow } as any;
+    const operationExecute = vi.mocked(BrowserOperation.prototype.execute);
+    vi.spyOn(capRouting, 'shouldUseBrowserSession').mockReturnValue(true);
+    vi.spyOn(runtime, 'browserSession').mockImplementation(async (_Factory, fn) => fn(mockPage));
+    const cmd = cli({
+      site: 'test-execution',
+      name: 'browser-operation-module', access: 'read',
+      description: 'test common browser operation module',
+      browser: true,
+      strategy: Strategy.PUBLIC,
+      func: async () => [{ ok: true }],
+    });
+
+    await executeCommand(cmd, {});
+
+    expect(operationExecute).toHaveBeenCalledTimes(1);
+    expect(operationExecute).toHaveBeenCalledWith(expect.any(Function), { retain: false });
+    expect(closeWindow).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -292,11 +350,11 @@ describe('executeCommand — non-browser timeout', () => {
     expect(sessionOpts[0]?.siteSession).toBe(expected);
     if (expected === 'persistent') {
       expect(sessionOpts[0]?.session).toBe('site:test-execution');
-      expect(closeWindow).not.toHaveBeenCalled();
     } else {
       expect(sessionOpts[0]?.session).toMatch(/^site:test-execution:/);
-      expect(closeWindow).toHaveBeenCalledTimes(1);
     }
+    expect(closeWindow).not.toHaveBeenCalled();
+    expect(BrowserOperation.prototype.execute).toHaveBeenCalledWith(expect.any(Function), { retain: expected === 'persistent' });
   });
 
   it.each(['', ' ', 'Persistent'])('rejects invalid OPENCLI_SITE_SESSION=%j before hooks or browser setup', async (env) => {
@@ -508,7 +566,8 @@ describe('executeCommand — non-browser timeout', () => {
 
     vi.stubEnv('OPENCLI_SITE_SESSION', 'ephemeral');
     await expect(executeCommand(cmd, {})).rejects.toThrow('adapter failure');
-    expect(closeWindow).toHaveBeenCalledTimes(1);
+    expect(closeWindow).not.toHaveBeenCalled();
+    expect(BrowserOperation.prototype.execute).toHaveBeenCalledWith(expect.any(Function), { retain: false });
   });
 
   it('skips closeWindow when --keep-tab=true (success path)', async () => {
@@ -530,6 +589,7 @@ describe('executeCommand — non-browser timeout', () => {
 
       await executeCommand(cmd, {}, false, { keepTab: 'true' });
       expect(closeWindow).not.toHaveBeenCalled();
+      expect(BrowserOperation.prototype.execute).toHaveBeenCalledWith(expect.any(Function), { retain: true });
     } finally {
       vi.restoreAllMocks();
     }
@@ -554,6 +614,7 @@ describe('executeCommand — non-browser timeout', () => {
 
       await expect(executeCommand(cmd, {}, false, { keepTab: 'true' })).rejects.toThrow('adapter failure');
       expect(closeWindow).not.toHaveBeenCalled();
+      expect(BrowserOperation.prototype.execute).toHaveBeenCalledWith(expect.any(Function), { retain: true });
     } finally {
       vi.restoreAllMocks();
     }
@@ -697,7 +758,14 @@ describe('executeCommand — non-browser timeout', () => {
         receiptPath: path.join(traceDir, 'receipt.json'),
         status: 'failure',
       });
-      expect(closeWindow).toHaveBeenCalledTimes(1);
+      expect(toEnvelope(thrown).teardown).toMatchObject({
+        operationId: 'operation-test',
+        status: 'verified',
+        leaseReleased: true,
+        survivingPages: [],
+      });
+      expect(closeWindow).not.toHaveBeenCalled();
+      expect(BrowserOperation.prototype.execute).toHaveBeenCalledWith(expect.any(Function), { retain: false });
     } finally {
       if (prevConfigDir === undefined) delete process.env.OPENCLI_CONFIG_DIR;
       else process.env.OPENCLI_CONFIG_DIR = prevConfigDir;
@@ -756,7 +824,8 @@ describe('executeCommand — non-browser timeout', () => {
         traceId,
         receipt: expect.objectContaining({ status: 'success' }),
       }));
-      expect(closeWindow).toHaveBeenCalledTimes(1);
+      expect(closeWindow).not.toHaveBeenCalled();
+      expect(BrowserOperation.prototype.execute).toHaveBeenCalledWith(expect.any(Function), { retain: false });
     } finally {
       if (prevConfigDir === undefined) delete process.env.OPENCLI_CONFIG_DIR;
       else process.env.OPENCLI_CONFIG_DIR = prevConfigDir;

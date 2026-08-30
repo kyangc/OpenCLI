@@ -160,6 +160,17 @@ describe('executePipeline', () => {
     ], { debug: true })).rejects.toThrow('Unknown pipeline step "unknownStep"');
   });
 
+  it('leaves terminal browser cleanup to the enclosing Browser Operation Module', async () => {
+    const closeWindow = vi.fn().mockResolvedValue(undefined);
+    const page = createMockPage({ closeWindow });
+
+    await expect(executePipeline(page, [
+      { unknownStep: 'test' },
+    ])).rejects.toBeInstanceOf(ConfigError);
+
+    expect(closeWindow).not.toHaveBeenCalled();
+  });
+
   it('passes args through template rendering', async () => {
     const page = createMockPage({
       evaluate: vi.fn().mockResolvedValue([1, 2, 3, 4, 5]),
