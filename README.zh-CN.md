@@ -416,8 +416,10 @@ inventory 消失，同时保留无关的 persistent lease。完整测试矩阵�
 
 路径限定的 Backend workflow 使用 Node.js 24 运行 backend 测试，从同一个
 checkout 验证真实 catalog interface，证明 CLI tarball 不包含 backend module，
-渲染 Compose，并构建 backend 与扩展镜像阶段。`kyangc-v*` release 必须先通过
-同一契约，并成功构建两个最终容器 target，才允许发布。
+渲染 Compose，并构建最终 backend 与 Chromium 镜像。随后它会用隔离 profile、
+禁用 session check 启动两个镜像，只读访问 `/health/live` 和 `/health/ready`：核对
+daemon/扩展版本、已连接 profile、pending command 和持久队列空闲状态，不提交任何
+Provider job。`kyangc-v*` release 必须通过同一契约和容器冒烟才允许发布。
 
 ## Fork 开发与发布
 

@@ -35,6 +35,7 @@ test('backend images build from the current checkout without a second OpenCLI so
   assert.doesNotMatch(dockerfile, /OPENCLI_(?:REPOSITORY|COMMIT)|git fetch/);
   assert.match(dockerfile, /COPY services\/opencli-backend\/package\.json/);
   assert.match(dockerfile, /COPY services\/opencli-backend\/src \/app\/src/);
+  assert.match(dockerfile, /COPY services\/opencli-backend\/scripts\/smoke-deployment\.mjs \/app\/scripts\/smoke-deployment\.mjs/);
   assert.match(compose, /context: \.\.\/\.\./);
   assert.doesNotMatch(compose, /OPENCLI_(?:REPOSITORY|COMMIT)/);
 });
@@ -63,4 +64,17 @@ test('the CLI release package excludes the backend module', async () => {
 
   assert.ok(paths.includes('dist/src/main.js'));
   assert.equal(paths.some((file) => file.startsWith('services/opencli-backend/')), false);
+});
+
+test('backend image verification and fork release both gate on the provider-neutral Compose smoke', async () => {
+  const [backendWorkflow, releaseWorkflow] = await Promise.all([
+    readFile(path.join(repositoryRoot, '.github/workflows/backend.yml'), 'utf8'),
+    readFile(path.join(repositoryRoot, '.github/workflows/kyangc-release.yml'), 'utf8'),
+  ]);
+
+  for (const workflow of [backendWorkflow, releaseWorkflow]) {
+    assert.match(workflow, /--target backend --tag local\/opencli-backend:2\.0\.0\.1/);
+    assert.match(workflow, /--target chromium --tag local\/opencli-chromium:2\.0\.0\.1/);
+    assert.match(workflow, /services\/opencli-backend\/scripts\/smoke-compose\.sh 2\.0\.0/);
+  }
 });

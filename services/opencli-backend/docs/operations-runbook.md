@@ -101,7 +101,24 @@ curl -fsS http://192.168.50.10:18080/v1/control \
 
    不要使用 `--no-deps`；当前 NAS 的 Compose 2.20 会因 `network_mode: service:chromium` 无法解析目标网络服务。
 
-5. 等待 backend healthy，并验证 `/health/ready`、`/metrics`、`/v1/audit`。
+5. 等待 backend healthy。session monitor 在队列暂停期间不会新建 Provider 巡检
+   job；确认 Bridge 连接后 resume，再执行只读部署冒烟：
+
+   ```bash
+   admin_token=$(cat "$opencli_runtime_root/secrets/api_token")
+   /usr/local/bin/docker exec opencli-backend opencli doctor
+   curl -fsS -X POST http://192.168.50.10:18080/v1/control/resume \
+     -H "Authorization: Bearer $admin_token"
+   /usr/local/bin/docker exec opencli-backend \
+     node /app/scripts/smoke-deployment.mjs \
+       --base-url http://127.0.0.1:8080 \
+       --expected-version 2.0.0 \
+       --timeout-seconds 180
+   ```
+
+   smoke 只访问 `/health/live` 和 `/health/ready`，不提交 job 或调用 Provider；版本
+   不一致、扩展未连接、没有 profile、存在 pending command，或队列仍有
+   active/queued 工作都会失败并阻断发布。随后再验证 `/metrics`、`/v1/audit`。
 6. 检查运行态没有漂移：restart policy 应为 `unless-stopped`，network mode 应为
    `container:<chromium-container-id>`。
 
@@ -111,7 +128,7 @@ curl -fsS http://192.168.50.10:18080/v1/control \
    ```
 
 7. 确认 Chromium container 的 `StartedAt` 未变化。
-8. resume，并确认 `activeCount=0`、`drained=true`。
+8. 确认 `activeCount=0`、queued count 为零且 `drained=true`。
 
 启动迁移会为旧 SQLite schema 增加必要字段。启动前处于 `running` 或 `cancel_requested` 的 job 会转为 `outcome_unknown`，不会自动重放。
 

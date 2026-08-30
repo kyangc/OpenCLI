@@ -30,6 +30,35 @@ docker compose --env-file .env up -d
 
 GUI 密码、管理员 API token 和 Agent token 位于未入库的 `secrets/` 目录。不要把它们写入 Compose、Git 或日志。由于 backend 与 Chromium 共享网络命名空间，API 的宿主机端口映射定义在 `chromium` 服务上；OpenCLI daemon 的 `19825` 不映射。
 
+## 发布与部署冒烟
+
+Backend workflow 和 `kyangc-v*` 发布 Gate 会从同一个 checkout 构建两个最终
+镜像，在隔离的临时 profile 中启动 Compose，然后运行：
+
+```bash
+sh services/opencli-backend/scripts/smoke-compose.sh 2.0.0
+```
+
+该编排显式设置 `OPENCLI_SESSION_CHECK_SITES=disabled`，只读访问
+`/health/live` 和 `/health/ready`；它不会提交 job，也不会调用真实 Provider。
+smoke 会核对 daemon 与扩展版本、Bridge、至少一个已连接 profile、pending command
+为零，以及 durable queue 没有 active/queued 工作。失败会阻断 workflow，并输出
+容器日志后清理临时容器、profile 和 secrets。为防误伤，若机器上已经存在
+`opencli-backend` 或 `opencli-chromium` 容器，隔离 Compose smoke 会直接拒绝运行。
+
+生产更新后在已运行的 backend 容器内调用同一个只读检查：
+
+```bash
+docker exec opencli-backend node /app/scripts/smoke-deployment.mjs \
+  --base-url http://127.0.0.1:8080 \
+  --expected-version 2.0.0 \
+  --timeout-seconds 180
+```
+
+GitHub 当前没有能访问 LAN NAS 的 runner、Environment 或部署 secrets，因此上述
+workflow 是镜像/发布 Gate，不声称已经自动部署生产。NAS 的升级、resume 和部署后
+smoke 仍按运维 runbook 执行；以后接入受控 runner 时直接复用同一命令。
+
 Docker 构建上下文是仓库根目录，CLI、扩展和 backend 必须来自同一个 checkout；
 不再支持 `OPENCLI_REPOSITORY` 或 `OPENCLI_COMMIT` 覆盖。Compose 要求显式设置
 `OPENCLI_RUNTIME_ROOT`：本地示例使用当前目录，NAS 必须指向既有的持久目录，

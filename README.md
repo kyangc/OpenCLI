@@ -392,9 +392,13 @@ disappears from full inventory while a persistent lease survives. See
 
 The path-scoped Backend workflow uses Node.js 24 to run the backend suite,
 exercise the real catalog interface from the same checkout, prove that the CLI
-tarball excludes the backend module, render Compose, and build the backend and
-extension image stages. A `kyangc-v*` release cannot publish until the same
-backend contract passes and both final container targets build.
+tarball excludes the backend module, render Compose, and build the final backend
+and Chromium images. It then starts both images with an isolated profile and
+session checks disabled, and runs a read-only deployment smoke against
+`/health/live` and `/health/ready`. The smoke verifies the daemon/extension
+version pair, connected profile, pending commands, and idle durable queue without
+submitting a Provider job. A `kyangc-v*` release cannot publish until the same
+contract and container smoke pass.
 
 ## Fork development and releases
 

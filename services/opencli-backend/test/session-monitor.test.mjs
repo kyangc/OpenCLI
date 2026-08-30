@@ -96,3 +96,35 @@ test('probes configured site sessions through the queue and reports login state'
     rmSync(directory, { recursive: true });
   }
 });
+
+test('does not enqueue provider session checks while deployment has paused the queue', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'opencli-sessions-paused-'));
+  const store = new JobStore(join(directory, 'jobs.sqlite3'));
+  const catalog = new CommandCatalog([
+    {
+      site: 'xiaohongshu', name: 'whoami', access: 'read', browser: true,
+      siteSession: 'persistent', args: [],
+    },
+  ]);
+  const service = new JobService({
+    store, executor: new SessionExecutor(), catalog, maxConcurrency: 1, pollIntervalMs: 5,
+  });
+  const monitor = new SessionMonitor({
+    sites: new Set(['xiaohongshu']),
+    catalog,
+    store,
+    service,
+    defaultTimeoutSeconds: 30,
+    intervalMs: 15 * 60 * 1000,
+  });
+
+  store.setPaused(true);
+  try {
+    assert.deepEqual(await monitor.checkNow(), []);
+    assert.equal(store.counts().queued ?? 0, 0);
+    assert.deepEqual(store.latestSessionChecks(), []);
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true });
+  }
+});
