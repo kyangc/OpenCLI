@@ -815,7 +815,9 @@ async function collectSearchHarvest(page, limit, requestedFilters) {
     if (waitResult !== 'content') {
         throw new CommandExecutionError('Unexpected Xiaohongshu search wait payload shape.');
     }
-    requireFilterApplication(await page.evaluate(buildApplySearchFiltersJs(requestedFilters)));
+    if (requestedFilters.length > 0) {
+        requireFilterApplication(await page.evaluate(buildApplySearchFiltersJs(requestedFilters)));
+    }
     const harvestOptions = harvestOptionsForLimit(limit);
     const harvest = requireHarvestPayload(await page.evaluate(buildScrollHarvestJs('www.xiaohongshu.com', limit, harvestOptions)), 'www.xiaohongshu.com');
     if (harvest.diag.securityBlock) {
@@ -898,10 +900,10 @@ export const command = cli({
         { name: 'location', type: 'string', default: 'all', choices: ['all', 'same-city', 'nearby'], help: 'Location distance' },
     ],
     columns: ['rank', 'title', 'author', 'likes', 'published_at', 'url'],
-    func: async (page, kwargs) => {
+    func: async (page, kwargs, { applyDefaultFilters = true } = {}) => {
         try {
             const limit = parseLimit(kwargs.limit);
-            const requestedFilters = resolveSearchFilters(kwargs);
+            const requestedFilters = applyDefaultFilters ? resolveSearchFilters(kwargs) : [];
             const keyword = encodeURIComponent(kwargs.query);
             const url = `https://www.xiaohongshu.com/search_result?keyword=${keyword}&source=web_search_result_notes`;
             await page.goto(url);
