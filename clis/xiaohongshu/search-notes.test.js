@@ -162,12 +162,12 @@ function pageWithRecoverableSearchTransportStall() {
 }
 
 describe('xiaohongshu search-notes', () => {
-    it('publishes a narrow read-only persistent-session interface', () => {
+    it('publishes a narrow read-only ephemeral-session interface', () => {
         expect(command).toMatchObject({
             site: 'xiaohongshu',
             name: 'search-notes',
             access: 'read',
-            siteSession: 'persistent',
+            siteSession: 'ephemeral',
         });
         expect(command.args.map((argument) => argument.name)).toEqual([
             'query',
@@ -424,10 +424,33 @@ describe('xiaohongshu search-notes', () => {
                     capture_status: 'captured',
                 })],
             });
+            expect(page.closeTab).toHaveBeenNthCalledWith(1, 'page-1');
+            expect(page.closeTab.mock.invocationCallOrder[0])
+                .toBeLessThan(page.goto.mock.invocationCallOrder[0]);
         }
         finally {
             vi.useRealTimers();
         }
+    });
+
+    it('does not retry an unknown search outcome when the failed page cannot be cancelled', async () => {
+        const page = pageWithOneNote();
+        page.getActivePage.mockReturnValue(undefined);
+        page.goto.mockRejectedValue(Object.assign(
+            new Error('local browser command deadline expired'),
+            { code: 'command_result_unknown' },
+        ));
+
+        await expect(command.func(page, {
+            query: '里斯本 雨天安排',
+            limit: 3,
+        })).rejects.toMatchObject({
+            code: 'COMMAND_EXEC',
+            cause: { code: 'command_result_unknown' },
+        });
+
+        expect(page.withCommandTimeout).toHaveBeenCalledTimes(1);
+        expect(page.closeTab).not.toHaveBeenCalled();
     });
 
     it('fails the batch with a typed timeout when the search phase transport expires', async () => {
