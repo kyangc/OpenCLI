@@ -105,6 +105,8 @@ const DEFAULT_COMMAND_TIMEOUT_SECONDS = 120;
 const EXTENSION_OP_TIMEOUT_MARGIN_MS = 15_000;
 /** Client aborts only this long after the daemon timer should have fired. */
 const HTTP_TIMEOUT_MARGIN_MS = 10_000;
+/** Explicit local deadlines must compose inside a caller's whole-command wall-clock budget. */
+const LOCAL_HTTP_TIMEOUT_MARGIN_MS = 2_000;
 
 let _userCommandTimeoutSeconds: number | null = null;
 
@@ -338,6 +340,9 @@ async function sendCommandRaw(
   const timeoutSeconds = effectiveCommandTimeoutSeconds(params);
   const deadlineAt = Date.now() + timeoutSeconds * 1000;
   const { localTimeoutSeconds: _localTimeoutSeconds, ...wireParams } = params;
+  const httpTimeoutMarginMs = typeof _localTimeoutSeconds === 'number' && _localTimeoutSeconds > 0
+    ? LOCAL_HTTP_TIMEOUT_MARGIN_MS
+    : HTTP_TIMEOUT_MARGIN_MS;
   const rawWindowMode = process.env.OPENCLI_WINDOW;
   const envWindowMode = rawWindowMode === 'foreground' || rawWindowMode === 'background'
     ? rawWindowMode
@@ -405,7 +410,7 @@ async function sendCommandRaw(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(command),
-        timeout: remainingMs + HTTP_TIMEOUT_MARGIN_MS,
+        timeout: remainingMs + httpTimeoutMarginMs,
       });
 
       const result = (await res.json()) as DaemonResult;
