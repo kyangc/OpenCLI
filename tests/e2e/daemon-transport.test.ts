@@ -253,6 +253,60 @@ describe('daemon transport contracts (real daemon)', () => {
     }
   });
 
+  it('routes an explicit operation cancellation after the original daemon deadline expires', async () => {
+    if (guard()) return;
+    const ext = new FakeExtension();
+    const operationId = `operation-${process.pid}`;
+    const receipt = {
+      operationId,
+      contextId: 'ctx-cancel-after-timeout',
+      surface: 'adapter',
+      reason: 'explicit cancellation',
+      status: 'verified',
+      startedAt: 1,
+      completedAt: 2,
+      lateCommandsBlocked: true,
+      leaseReleased: true,
+      targetPages: ['target-1'],
+      survivingPages: [],
+    };
+    ext.onCommand = (cmd) => cmd.action === 'operation-cancel'
+      ? { id: String(cmd.id), ok: true, data: receipt }
+      : null;
+    await ext.connect('ctx-cancel-after-timeout');
+    try {
+      const timedOut = await postCommand({
+        id: cmdId(),
+        action: 'exec',
+        code: 'new Promise(() => {})',
+        session: operationId,
+        surface: 'adapter',
+        siteSession: 'ephemeral',
+        contextId: 'ctx-cancel-after-timeout',
+        deadlineAt: Date.now() + 1_500,
+      });
+      expect(timedOut.status).toBe(408);
+      expect(timedOut.result.errorCode).toBe('command_result_unknown');
+
+      const cancelled = await postCommand({
+        id: cmdId(),
+        action: 'operation-cancel',
+        session: operationId,
+        surface: 'adapter',
+        siteSession: 'ephemeral',
+        contextId: 'ctx-cancel-after-timeout',
+      });
+      expect(cancelled.status, JSON.stringify(cancelled.result)).toBe(200);
+      expect(cancelled.result).toEqual(expect.objectContaining({
+        ok: true,
+        data: receipt,
+      }));
+      expect(ext.received.map((cmd) => cmd.action)).toEqual(['exec', 'operation-cancel']);
+    } finally {
+      await ext.close();
+    }
+  });
+
   it('reports command_result_unknown when the extension dies after dispatch', async () => {
     if (guard()) return;
     const ext = new FakeExtension();

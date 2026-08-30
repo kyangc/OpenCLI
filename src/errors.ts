@@ -20,6 +20,7 @@
  * 130   Interrupted by Ctrl-C           (set by tui.ts SIGINT handler)
  */
 import type { ObservationTraceReceipt } from './observation/events.js';
+import type { BrowserTeardownReceipt } from './browser/operation.js';
 
 // ── Exit code table ──────────────────────────────────────────────────────────
 
@@ -226,6 +227,8 @@ export interface ErrorEnvelope {
     receiptPath: string;
     status: ObservationTraceReceipt['status'];
   };
+  /** Verified or incomplete physical Browser Operation teardown evidence. */
+  teardown?: BrowserTeardownReceipt;
 }
 
 // ── Utilities ───────────────────────────────────────────────────────────────
@@ -246,10 +249,33 @@ function serializeCause(cause: unknown, depth: number = 0): string {
   return String(cause);
 }
 
+function getBrowserTeardownReceipt(err: unknown): BrowserTeardownReceipt | undefined {
+  const seen = new Set<unknown>();
+  let current = err;
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    const record = current as { teardown?: unknown; receipt?: unknown; cause?: unknown };
+    const candidate = record.teardown ?? record.receipt;
+    if (candidate && typeof candidate === 'object') {
+      const receipt = candidate as Partial<BrowserTeardownReceipt>;
+      if (typeof receipt.operationId === 'string'
+        && typeof receipt.contextId === 'string'
+        && (receipt.status === 'verified' || receipt.status === 'incomplete')
+        && Array.isArray(receipt.targetPages)
+        && Array.isArray(receipt.survivingPages)) {
+        return receipt as BrowserTeardownReceipt;
+      }
+    }
+    current = record.cause;
+  }
+  return undefined;
+}
+
 /** Build an ErrorEnvelope from any caught value. */
 export function toEnvelope(err: unknown): ErrorEnvelope {
   const cause = err instanceof Error && err.cause ? serializeCause(err.cause) : undefined;
   const traceReceipt = getTraceReceipt(err);
+  const teardown = getBrowserTeardownReceipt(err);
   const trace = traceReceipt ? {
     traceId: traceReceipt.traceId,
     dir: traceReceipt.traceDir,
@@ -268,6 +294,7 @@ export function toEnvelope(err: unknown): ErrorEnvelope {
         ...(cause ? { cause } : {}),
       },
       ...(trace ? { trace } : {}),
+      ...(teardown ? { teardown } : {}),
     };
   }
   const msg = getErrorMessage(err);
@@ -280,5 +307,6 @@ export function toEnvelope(err: unknown): ErrorEnvelope {
       ...(cause ? { cause } : {}),
     },
     ...(trace ? { trace } : {}),
+    ...(teardown ? { teardown } : {}),
   };
 }

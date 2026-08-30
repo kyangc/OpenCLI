@@ -208,6 +208,12 @@ function createChromeMock() {
     },
     windows: {
       get: vi.fn(async (windowId: number) => ({ id: windowId, focused: windowId === lastFocusedWindowId })),
+      getAll: vi.fn(async () => [...new Set(tabs.map((tab) => tab.windowId))].map((windowId) => ({
+        id: windowId,
+        focused: windowId === lastFocusedWindowId,
+        type: 'normal',
+        state: 'normal',
+      }))),
       create: vi.fn(async ({ url, focused, width, height, type }: any) => ({ id: 1, url, focused, width, height, type })),
       remove: vi.fn(async (_windowId: number) => {}),
       onRemoved: { addListener: vi.fn() } as Listener<(windowId: number) => void>,
@@ -1119,16 +1125,243 @@ describe('background tab isolation', () => {
     expect(mod.__test__.getSession(adapterKey('second'))).toEqual(expect.objectContaining({ preferredTabId: 11 }));
 
     const closeSecond = await mod.__test__.handleCommand({ id: 'close-second', action: 'close-window', session: 'second', surface: 'adapter' });
-    expect(closeSecond).toEqual(expect.objectContaining({ ok: true }));
+    expect(closeSecond).toEqual(expect.objectContaining({
+      ok: true,
+      teardown: expect.objectContaining({
+        operationId: 'second',
+        status: 'verified',
+        leaseReleased: true,
+        survivingPages: [],
+      }),
+    }));
     expect(chrome.tabs.remove).toHaveBeenCalledWith(11);
     expect(chrome.tabs.update).not.toHaveBeenCalledWith(11, { url: 'about:blank', active: true });
     expect(chrome.windows.remove).not.toHaveBeenCalled();
     expect(mod.__test__.getSession(adapterKey('first'))).not.toBeNull();
     expect(mod.__test__.getSession(adapterKey('second'))).toBeNull();
 
+    const closeSecondAgain = await mod.__test__.handleCommand({
+      id: 'close-second-again',
+      action: 'close-window',
+      session: 'second',
+      surface: 'adapter',
+      siteSession: 'ephemeral',
+    });
+    expect(closeSecondAgain).toEqual(expect.objectContaining({
+      ok: true,
+      teardown: expect.objectContaining({
+        operationId: 'second',
+        status: 'verified',
+      }),
+    }));
+
     await mod.__test__.handleCommand({ id: 'close-first', action: 'close-window', session: 'first', surface: 'adapter' });
     expect(chrome.tabs.remove).toHaveBeenCalledWith(1);
     expect(chrome.windows.remove).not.toHaveBeenCalled();
+  });
+
+  it('reports an incomplete teardown and keeps the lease when the target survives cancellation', async () => {
+    const { chrome } = createChromeMock();
+    chrome.tabs.remove.mockRejectedValueOnce(new Error('synthetic remove failure'));
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    mod.__test__.setSession(adapterKey('operation-1'), { windowId: 1, owned: true, preferredTabId: 1 });
+
+    const result = await mod.__test__.handleCommand({
+      id: 'cancel-operation-1',
+      action: 'operation-cancel',
+      session: 'operation-1',
+      surface: 'adapter',
+      siteSession: 'ephemeral',
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      id: 'cancel-operation-1',
+      ok: false,
+      errorCode: 'teardown_incomplete',
+      data: expect.objectContaining({
+        operationId: 'operation-1',
+        status: 'incomplete',
+        leaseReleased: false,
+        targetPages: ['target-1'],
+        survivingPages: ['target-1'],
+      }),
+    }));
+    expect(mod.__test__.getSession(adapterKey('operation-1'))).not.toBeNull();
+  });
+
+  it('rejects operation cancellation outside the ephemeral adapter authority boundary', async () => {
+    const { chrome } = createChromeMock();
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    const result = await mod.__test__.handleCommand({
+      id: 'cancel-persistent-operation',
+      action: 'operation-cancel',
+      session: 'persistent-operation',
+      surface: 'adapter',
+      siteSession: 'persistent',
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      id: 'cancel-persistent-operation',
+      ok: false,
+      errorCode: 'operation_not_ephemeral',
+    }));
+  });
+
+  it('does not verify teardown when the cancellation tombstone is not durable across worker restart', async () => {
+    const { chrome } = createChromeMock();
+    const sessionSet = chrome.storage.session.set.getMockImplementation();
+    chrome.storage.session.set.mockImplementation(async (items: Record<string, unknown>) => {
+      if ('opencli_cancelled_operations_v1' in items) {
+        throw new Error('synthetic session storage failure');
+      }
+      return sessionSet?.(items);
+    });
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    mod.__test__.setSession(adapterKey('operation-1'), { windowId: 1, owned: true, preferredTabId: 1 });
+
+    const result = await mod.__test__.handleCommand({
+      id: 'cancel-operation-1',
+      action: 'operation-cancel',
+      session: 'operation-1',
+      surface: 'adapter',
+      siteSession: 'ephemeral',
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      ok: false,
+      errorCode: 'teardown_incomplete',
+      teardown: expect.objectContaining({
+        status: 'incomplete',
+        lateCommandsBlocked: false,
+        leaseReleased: true,
+        survivingPages: [],
+      }),
+    }));
+  });
+
+  it('rejects late commands for a cancelled operation instead of recreating its lease', async () => {
+    const { chrome } = createChromeMock();
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    mod.__test__.setSession(adapterKey('operation-1'), { windowId: 1, owned: true, preferredTabId: 1 });
+
+    const cancelled = await mod.__test__.handleCommand({
+      id: 'cancel-operation-1',
+      action: 'operation-cancel',
+      session: 'operation-1',
+      surface: 'adapter',
+      siteSession: 'ephemeral',
+    });
+    expect(cancelled).toEqual(expect.objectContaining({
+      ok: true,
+      data: expect.objectContaining({ status: 'verified' }),
+    }));
+
+    const late = await mod.__test__.handleCommand({
+      id: 'late-operation-1',
+      action: 'navigate',
+      session: 'operation-1',
+      surface: 'adapter',
+      siteSession: 'ephemeral',
+      url: 'https://late.example/',
+    });
+
+    expect(late).toEqual(expect.objectContaining({
+      id: 'late-operation-1',
+      ok: false,
+      errorCode: 'operation_cancelled',
+    }));
+    expect(mod.__test__.getSession(adapterKey('operation-1'))).toBeNull();
+  });
+
+  it('restores cancellation tombstones before accepting commands after an MV3 worker restart', async () => {
+    const { chrome } = createChromeMock();
+    vi.stubGlobal('chrome', chrome);
+
+    const firstWorker = await import('./background');
+    firstWorker.__test__.setSession(adapterKey('operation-1'), { windowId: 1, owned: true, preferredTabId: 1 });
+    const cancelled = await firstWorker.__test__.handleCommand({
+      id: 'cancel-operation-1',
+      action: 'operation-cancel',
+      session: 'operation-1',
+      surface: 'adapter',
+      siteSession: 'ephemeral',
+    });
+    expect(cancelled).toEqual(expect.objectContaining({ ok: true }));
+
+    vi.resetModules();
+    const restartedWorker = await import('./background');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const late = await restartedWorker.__test__.handleCommand({
+      id: 'late-operation-1',
+      action: 'navigate',
+      session: 'operation-1',
+      surface: 'adapter',
+      siteSession: 'ephemeral',
+      url: 'https://late.example/',
+    });
+
+    expect(late).toEqual(expect.objectContaining({
+      ok: false,
+      errorCode: 'operation_cancelled',
+    }));
+    expect(restartedWorker.__test__.getSession(adapterKey('operation-1'))).toBeNull();
+  });
+
+  it('returns a sanitized full inventory of windows, tabs, and lease ownership', async () => {
+    const { chrome, tabs } = createChromeMock();
+    tabs[0].url = 'https://automation.example/path?token=secret#fragment';
+    tabs[1].url = 'file:///Users/private/credential.txt';
+    vi.stubGlobal('chrome', chrome);
+
+    const mod = await import('./background');
+    mod.__test__.setSession(adapterKey('operation-1'), { windowId: 1, owned: true, preferredTabId: 1 });
+    mod.__test__.setSession(browserKey('default'), { windowId: 2, owned: false, preferredTabId: 2 });
+
+    const result = await mod.__test__.handleCommand({
+      id: 'inventory-all',
+      action: 'inventory',
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      id: 'inventory-all',
+      ok: true,
+      data: expect.objectContaining({
+        capturedAt: expect.any(Number),
+        contextId: expect.any(String),
+        windows: expect.arrayContaining([
+          expect.objectContaining({ id: 1, role: 'automation' }),
+          expect.objectContaining({ id: 2, role: 'user' }),
+        ]),
+        tabs: expect.arrayContaining([
+          expect.objectContaining({
+            page: 'target-1',
+            windowId: 1,
+            url: 'https://automation.example/path',
+            lease: expect.objectContaining({ operationId: 'operation-1', surface: 'adapter' }),
+          }),
+          expect.objectContaining({
+            page: 'target-2',
+            windowId: 2,
+            lease: expect.objectContaining({ operationId: 'default', surface: 'browser' }),
+          }),
+        ]),
+        leases: expect.arrayContaining([
+          expect.objectContaining({ operationId: 'operation-1', page: 'target-1' }),
+          expect.objectContaining({ operationId: 'default', page: 'target-2' }),
+        ]),
+      }),
+    }));
+    expect(JSON.stringify(result)).not.toContain('token=secret');
+    expect(JSON.stringify(result)).not.toContain('fragment');
+    expect(JSON.stringify(result)).not.toContain('/Users/private');
   });
 
   it('releases the current owned tab lease when tabs close targets it', async () => {

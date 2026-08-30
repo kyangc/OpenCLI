@@ -37,6 +37,7 @@ import { isElectronApp } from './electron-apps.js';
 import { probeCDP, resolveElectronEndpoint } from './launcher.js';
 import { ObservationSession, exportObservationSession, type ObservationExportResult, type ObservationExportStatus } from './observation/index.js';
 import { resolveAdapterSourcePath } from './adapter-source.js';
+import { BrowserOperation } from './browser/operation.js';
 
 const _loadedModules = new Map<string, Promise<void>>();
 /** Track mtime of loaded user adapter files for hot-reload in daemon mode. */
@@ -274,6 +275,13 @@ export async function executeCommand(
       const session = resolveAdapterBrowserSession(cmd, siteSession);
       const keepTab = resolveKeepTab(siteSession, opts.keepTab);
       const windowMode = resolveBrowserWindowMode(cmd.defaultWindowMode ?? 'background', opts.windowMode);
+      const operation = new BrowserOperation({
+        operationId: session,
+        ...profileRouting,
+        surface: 'adapter',
+        siteSession,
+        windowMode,
+      });
       // Persistent-session write commands take a logical lease on the site
       // session so a concurrent retry fails fast instead of driving the same
       // Chrome tab. The runId flows to the daemon on every command (acquire +
@@ -291,6 +299,7 @@ export async function executeCommand(
       let adapterRun = null as Promise<unknown> | null;
       try {
       result = await browserSession(BrowserFactory, async (page) => {
+        const outcome = await operation.execute(async () => {
         const observation = traceMode === 'off'
           ? null
           : new ObservationSession({
@@ -390,10 +399,6 @@ export async function executeCommand(
             await collectObservationEvidence(observation, page).catch(() => {});
             exportTraceArtifact(observation, 'success', undefined, opts.onTraceExport);
           }
-          // Adapter commands are one-shot — release the current tab lease immediately
-          // instead of waiting for the 30s idle timeout. The automation container
-          // window stays open for reuse.
-          if (!keepTab) await page.closeWindow?.().catch(() => {});
           return result;
         } catch (err) {
           if (!commandSettled) adapterStillRunning = true;
@@ -414,12 +419,10 @@ export async function executeCommand(
               exportTraceArtifact(observation, 'failure', err, opts.onTraceExport);
             }
           }
-          // Release the tab lease on failure too — without this, the lease lingers
-          // until the extension's idle timer fires (unreliable on Windows where
-          // MV3 service workers may be suspended before setTimeout triggers).
-          if (!keepTab) await page.closeWindow?.().catch(() => {});
           throw err;
         }
+        }, { retain: keepTab });
+        return outcome.result;
       }, { session, cdpEndpoint, ...profileRouting, windowMode, surface: 'adapter', siteSession });
       } catch (err) {
         browserRunError = err;
@@ -577,8 +580,8 @@ export function prepareCommandArgs(
 /**
  * Runtime ceiling padding (seconds) added on top of the user's `--timeout`.
  * The adapter's polling loop typically uses the full user value; the padding
- * gives us room for the adapter to return + closeWindow + trace export before
- * the runtime kills the Promise.
+ * gives us room for the adapter to return, export trace evidence, and complete
+ * verified Browser Operation teardown before the runtime kills the Promise.
  */
 const RUNTIME_TIMEOUT_PADDING_SECONDS = 30;
 

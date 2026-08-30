@@ -404,6 +404,39 @@ describe('daemon-client', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('preserves an executor teardown receipt on a failed browser command', async () => {
+    const teardown = {
+      operationId: 'operation-1',
+      contextId: 'profile-1',
+      surface: 'adapter',
+      reason: 'operation CDP timeout',
+      status: 'verified',
+      startedAt: 1,
+      completedAt: 2,
+      lateCommandsBlocked: true,
+      leaseReleased: true,
+      targetPages: ['target-1'],
+      survivingPages: [],
+    };
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        id: 'server',
+        ok: false,
+        error: 'Runtime.evaluate timed out',
+        errorCode: 'cdp_timeout',
+        teardown,
+      }),
+    } as Response);
+
+    await expect(sendCommand('exec', { code: 'new Promise(() => {})' })).rejects.toMatchObject({
+      name: 'BrowserCommandError',
+      code: 'cdp_timeout',
+      teardown,
+    } satisfies Partial<BrowserCommandError>);
+  });
+
   it('sendCommand does not retry command_result_unknown even when the message looks transient', async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValue({

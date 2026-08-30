@@ -206,7 +206,7 @@ function isPreConnectFetchError(err: unknown): boolean {
 
 export interface DaemonCommand {
   id: string;
-  action: 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot' | 'close-window' | 'set-file-input' | 'insert-text' | 'bind' | 'network-capture-start' | 'network-capture-read' | 'wait-download' | 'cdp' | 'frames' | 'lease-release';
+  action: 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot' | 'close-window' | 'operation-cancel' | 'inventory' | 'set-file-input' | 'insert-text' | 'bind' | 'network-capture-start' | 'network-capture-read' | 'wait-download' | 'cdp' | 'frames' | 'lease-release';
   /** Target page identity (targetId). Cross-layer contract with the extension. */
   page?: string;
   code?: string;
@@ -291,12 +291,19 @@ export interface DaemonResult {
   error?: string;
   errorCode?: string;
   errorHint?: string;
+  /** Physical browser teardown evidence, including on a failed command. */
+  teardown?: unknown;
   /** Page identity (targetId) — present on page-scoped command responses */
   page?: string;
 }
 
 export class BrowserCommandError extends Error {
-  constructor(message: string, readonly code?: string, readonly hint?: string) {
+  constructor(
+    message: string,
+    readonly code?: string,
+    readonly hint?: string,
+    readonly teardown?: unknown,
+  ) {
     super(message);
     this.name = 'BrowserCommandError';
   }
@@ -425,7 +432,12 @@ async function sendCommandRaw(
       }
 
       if (result.errorCode && UNKNOWN_OUTCOME_CODES.has(result.errorCode)) {
-        throw new BrowserCommandError(result.error ?? 'Browser command result is unknown', result.errorCode, result.errorHint);
+        throw new BrowserCommandError(
+          result.error ?? 'Browser command result is unknown',
+          result.errorCode,
+          result.errorHint,
+          result.teardown,
+        );
       }
 
       if (isPreDispatchError(result.errorCode) && !ensureUsed) {
@@ -457,7 +469,12 @@ async function sendCommandRaw(
         continue;
       }
 
-      throw new BrowserCommandError(result.error ?? 'Daemon command failed', result.errorCode, result.errorHint);
+      throw new BrowserCommandError(
+        result.error ?? 'Daemon command failed',
+        result.errorCode,
+        result.errorHint,
+        result.teardown,
+      );
     } catch (err) {
       if (err instanceof BrowserCommandError || err instanceof BrowserConnectError || err instanceof SessionBusyError) throw err;
 
