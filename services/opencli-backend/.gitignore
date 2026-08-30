@@ -1,0 +1,10 @@
+.DS_Store
+node_modules/
+coverage/
+
+# Runtime state and secrets
+data/
+browser-config/
+opencli-state/
+secrets/
+.env

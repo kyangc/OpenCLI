@@ -39,6 +39,7 @@ headed Chrome.
 | Persistent sessions | Explicitly persistent site sessions keep their site tab and login continuity. Cleanup targets the failed ephemeral operation, not unrelated persistent or user-owned tabs. |
 | Chrome resource reuse | Browser commands and adapters use separate owned tab groups/windows. Empty automation container windows may be reused instead of creating an endless series of windows. |
 | Xiaohongshu reliability | Xiaohongshu search was the first production pressure test: bounded hydration/acquisition, cancellable note batches, one bounded stalled-read retry, unavailable/duplicate filter handling, and failed-search tab reclamation. These do not replace the common lifecycle with a Provider special case. |
+| Long-running backend | The optional remote control-plane module lives in `services/opencli-backend`. It builds the CLI, extension, and backend from one `stable` checkout while preserving process, package, data, and container isolation. |
 | Release safety | CLI and MV3 extension have independent fork versions, versioned release assets and checksums, a versioned service-worker filename, and a release gate that tests CLI + extension together. |
 | Real-browser gate | Browser/extension lifecycle changes targeting `stable` run synthetic daemon + MV3 extension + real headed Chrome teardown coverage on Linux, plus daemon transport contracts across Linux, macOS, and Windows. |
 
@@ -46,6 +47,24 @@ The operation cleanup owns OpenCLI-created leases and tabs. It does **not**
 kill Chrome, delete a browser profile, or close arbitrary user tabs. Closing an
 owned tab stops its page activity; Chrome remains responsible for reclaiming
 the renderer process itself.
+
+### Optional long-running backend
+
+[`services/opencli-backend`](https://github.com/kyangc/OpenCLI/tree/stable/services/opencli-backend)
+provides authenticated
+REST and MCP adapters, a durable SQLite queue, resource-aware scheduling,
+audit records, and operational metrics for internal agents. It consumes
+OpenCLI only through the public CLI interface (`opencli list -f json`,
+structured argv, JSON output, and documented exit codes); it does not import
+CLI or daemon implementation files.
+
+The backend requires Node.js 24 and remains a separately installed package and
+separately deployed container. Keeping it in this repository removes the old
+cross-repository commit pin: Docker images now build the CLI, unpacked
+extension, and backend from the same checkout. Runtime profiles, SQLite data,
+OpenCLI state, and secrets remain outside Git under one explicitly configured
+`OPENCLI_RUNTIME_ROOT`. See the [backend README](https://github.com/kyangc/OpenCLI/blob/stable/services/opencli-backend/README.md)
+for setup and safety constraints.
 
 ## Quick Start
 
@@ -356,9 +375,12 @@ extension tests, both builds, and the extension release artifact:
 ```bash
 npm ci
 npm ci --prefix extension
+npm ci --ignore-scripts --prefix services/opencli-backend
 TZ=Asia/Shanghai npm run verify:fork-release
+npm run verify:backend
 npm audit --omit=dev --audit-level=high
 npm audit --omit=dev --audit-level=high --prefix extension
+npm audit --omit=dev --audit-level=high --prefix services/opencli-backend
 ```
 
 PRs targeting `stable` that touch the browser/extension lifecycle paths also
@@ -368,12 +390,21 @@ Xvfb, then proves that a timed-out ephemeral operation stops page activity and
 disappears from full inventory while a persistent lease survives. See
 **[TESTING.md](./TESTING.md)** for the complete test matrix.
 
+The path-scoped Backend workflow uses Node.js 24 to run the backend suite,
+exercise the real catalog interface from the same checkout, prove that the CLI
+tarball excludes the backend module, render Compose, and build the backend and
+extension image stages. A `kyangc-v*` release cannot publish until the same
+backend contract passes and both final container targets build.
+
 ## Fork development and releases
 
 - `main` is a fast-forward mirror of `upstream/main`; it is not a production
   runtime source.
 - `stable` is the fork's production source of truth. Candidate `codex/*`
   branches and PRs target `stable`.
+- `services/opencli-backend` exists only on `stable`. It keeps its own package,
+  Node.js 24 runtime, tests, SQLite authority, and container lifecycle; `main`
+  remains an upstream mirror without this module.
 - CLI tags use `kyangc-v<version>`. The CLI and extension have independent
   semver lines; their upstream bases are provenance, not version authorities.
 - The npm package/import name remains `@jackwener/opencli` only to preserve the

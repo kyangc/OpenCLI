@@ -1,0 +1,80 @@
+name: Backend
+
+on:
+  push:
+    branches: [stable]
+    paths:
+      - 'services/opencli-backend/**'
+      - 'src/**'
+      - 'clis/**'
+      - 'extension/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'cli-manifest.json'
+      - '.dockerignore'
+      - '.github/workflows/backend.yml'
+  pull_request:
+    branches: [stable]
+    paths:
+      - 'services/opencli-backend/**'
+      - 'src/**'
+      - 'clis/**'
+      - 'extension/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'cli-manifest.json'
+      - '.dockerignore'
+      - '.github/workflows/backend.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            services/opencli-backend/package-lock.json
+
+      - name: Install OpenCLI dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install backend dependencies
+        run: npm ci --ignore-scripts --prefix services/opencli-backend
+
+      - name: Verify backend and OpenCLI contract
+        run: npm run verify:backend
+
+      - name: Audit backend production dependencies
+        run: npm audit --omit=dev --audit-level=high --prefix services/opencli-backend
+
+      - name: Render Compose configuration
+        run: docker compose --env-file services/opencli-backend/.env.example -f services/opencli-backend/compose.yaml config --quiet
+
+  container-build:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build backend image from this checkout
+        run: docker build --target backend -f services/opencli-backend/Dockerfile .
+
+      - name: Build extension image stage from this checkout
+        run: docker build --target opencli-extension-build -f services/opencli-backend/Dockerfile .

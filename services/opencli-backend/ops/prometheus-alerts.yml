@@ -1,0 +1,40 @@
+groups:
+  - name: opencli-backend
+    rules:
+      - alert: OpenCLIBackendBridgeDown
+        expr: opencli_backend_bridge_ready == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: OpenCLI Browser Bridge is disconnected
+
+      - alert: OpenCLIBackendQueueNearCapacity
+        expr: opencli_backend_jobs{status="queued"} / opencli_backend_max_queued_jobs > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenCLI durable queue is above 80 percent capacity
+
+      - alert: OpenCLIBackendSessionNeedsLogin
+        expr: opencli_backend_session_state{state="needs_login"} == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenCLI site session requires manual login
+
+      - alert: OpenCLIBackendWatchdogTermination
+        expr: increase(opencli_backend_watchdog_terminations_total[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenCLI scheduler watchdog terminated an execution
+
+      - alert: OpenCLIBackendSustainedRateLimit
+        expr: increase(opencli_backend_rate_limit_rejections_total[10m]) > 10
+        labels:
+          severity: warning
+        annotations:
+          summary: OpenCLI backend is repeatedly rate limiting submissions

@@ -37,12 +37,27 @@ OpenCLI 可以用同一套 CLI 做三类事情：
 | 持久会话 | 明确声明为 persistent 的站点会话保留站点 tab 和登录连续性。清理只针对失败的一次性 operation，不误关其他持久会话或用户自己的 tab。 |
 | Chrome 资源复用 | browser 命令与 adapter 使用分开的受管 tab group/window；空的自动化容器可以复用，避免无意义地不断新建 window。 |
 | 小红书可靠性 | 小红书搜索是第一组生产压力测试：对 hydration/acquisition、笔记批次和总墙钟时间设上限，支持取消、一次有界重试、不可用/重复筛选项处理以及失败搜索 tab 回收；这些能力没有做成 Provider 特例。 |
+| 长期在线 backend | 可选的远程控制面模块位于 `services/opencli-backend`。CLI、扩展和 backend 从同一个 `stable` checkout 构建，同时继续隔离进程、包、运行数据和容器。 |
 | 发布安全 | CLI 与 MV3 扩展使用独立 fork 版本；release 提供带版本的构件与校验和，service worker 文件名带版本，发布 Gate 会把 CLI 与扩展一起测试。 |
 | 真实浏览器 Gate | 面向 `stable` 的浏览器/扩展生命周期改动在 Linux 上运行合成 daemon + MV3 扩展 + 真实 headed Chrome 的 teardown 测试，并在 Linux、macOS、Windows 上运行 daemon transport 合约测试。 |
 
 清理边界只拥有 OpenCLI 创建的 lease 和 tab。它**不会**杀掉 Chrome、删除
 浏览器 profile，也不会关闭任意用户 tab。关闭 operation 自己的 tab 会停止该
 页面活动；renderer 进程本身最终仍由 Chrome 回收。
+
+### 可选的长期在线 backend
+
+[`services/opencli-backend`](https://github.com/kyangc/OpenCLI/tree/stable/services/opencli-backend)
+为内部 Agent 提供带
+鉴权的 REST/MCP adapter、SQLite 持久队列、资源感知调度、审计和运维指标。
+它只通过公开 CLI interface 使用 OpenCLI：`opencli list -f json`、结构化 argv、
+JSON 输出和已记录的退出码；不会导入 CLI 或 daemon 的实现文件。
+
+backend 要求 Node.js 24，仍是独立安装的包和独立部署的容器。迁入同仓后，Docker
+直接从同一个 checkout 构建 CLI、unpacked 扩展和 backend，删除了原先跨仓的
+commit pin。浏览器 profile、SQLite、OpenCLI state 和 secrets 仍在 Git 之外，
+统一挂到显式配置的 `OPENCLI_RUNTIME_ROOT`。配置方式和安全约束见
+[backend README](https://github.com/kyangc/OpenCLI/blob/stable/services/opencli-backend/README.md)。
 
 ## 快速开始
 
@@ -385,9 +400,12 @@ Fork 发布 Gate 会核验 package metadata、TypeScript、unit/adapter/extensio
 ```bash
 npm ci
 npm ci --prefix extension
+npm ci --ignore-scripts --prefix services/opencli-backend
 TZ=Asia/Shanghai npm run verify:fork-release
+npm run verify:backend
 npm audit --omit=dev --audit-level=high
 npm audit --omit=dev --audit-level=high --prefix extension
+npm audit --omit=dev --audit-level=high --prefix services/opencli-backend
 ```
 
 面向 `stable` 且触及浏览器/扩展生命周期路径的 PR 还必须通过真实 headed
@@ -396,10 +414,17 @@ Xvfb 下的 headed Chrome，证明超时的一次性 operation 会停止页面�
 inventory 消失，同时保留无关的 persistent lease。完整测试矩阵见
 [TESTING.md](./TESTING.md)。
 
+路径限定的 Backend workflow 使用 Node.js 24 运行 backend 测试，从同一个
+checkout 验证真实 catalog interface，证明 CLI tarball 不包含 backend module，
+渲染 Compose，并构建 backend 与扩展镜像阶段。`kyangc-v*` release 必须先通过
+同一契约，并成功构建两个最终容器 target，才允许发布。
+
 ## Fork 开发与发布
 
 - `main` 只做 `upstream/main` 的 fast-forward 镜像，不是生产 runtime 来源。
 - `stable` 是 fork 的生产事实源；候选 `codex/*` 分支和 PR 都以 `stable` 为目标。
+- `services/opencli-backend` 只存在于 `stable`，继续保留自己的 package、Node.js
+  24 runtime、测试、SQLite 权威和容器生命周期；`main` 仍是没有该模块的上游镜像。
 - CLI tag 使用 `kyangc-v<version>`。CLI 与扩展各有独立 semver；上游基线只记录
   来源，不是 fork 版本权威。
 - npm 包名和 import 仍保留 `@jackwener/opencli`，只用于兼容 adapter/plugin

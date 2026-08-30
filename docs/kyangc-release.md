@@ -1,7 +1,8 @@
 # Kyangc fork release
 
-This fork tests the CLI, daemon, and unpacked Chrome extension together, while
-versioning the CLI and extension independently. `main` mirrors
+This fork tests the CLI, daemon, unpacked Chrome extension, and the optional
+long-running backend contract together, while versioning deployable modules
+independently. `main` mirrors
 `upstream/main`; it is never a runtime source.
 
 ## Branches and versions
@@ -16,6 +17,10 @@ versioning the CLI and extension independently. `main` mirrors
 - Extension release label: `kyangc-ext-v<extension-version>`.
 - Extension package and Chrome manifest version: `<extension-version>`.
 - The extension's own `opencliFork.upstreamVersion` records its upstream base.
+- Backend package version: `services/opencli-backend/package.json`; it has an
+  independent Node.js 24 runtime and container lifecycle.
+- Backend source exists only on `stable`. It is not added to the upstream
+  mirror on `main`.
 
 CLI and extension versions are independent stable semver lines. The root
 package and tag must agree on the CLI release. The extension package, manifest
@@ -120,9 +125,12 @@ rewrite `stable`.
 
    ```bash
    npm ci
+   npm ci --ignore-scripts --prefix services/opencli-backend
    npm ci --prefix extension
    TZ=Asia/Shanghai npm run verify:fork-release
+   npm run verify:backend
    npm audit --omit=dev --audit-level=high
+   npm audit --omit=dev --audit-level=high --prefix services/opencli-backend
    npm audit --omit=dev --audit-level=high --prefix extension
    ```
 
@@ -160,12 +168,16 @@ rewrite `stable`.
    Then execute one low-cost real browser command plus the consuming
    application's read-only health checks.
 9. Push the candidate branch and open a PR targeting `stable`. Require the
-   CLI, extension, and headed-browser checks to pass before merging.
+   CLI, extension, backend, and headed-browser checks to pass before merging.
 10. Merge to `stable`, tag the resulting commit, and publish the GitHub release.
 
-PRs to `stable` run the CLI, extension, and headed-browser workflows. Tags named
-`kyangc-v*` create a GitHub release containing the CLI tarball, the compatible
-extension ZIP, and checksums without publishing the upstream npm package name.
+PRs to `stable` run the CLI, extension, backend, and headed-browser workflows.
+The backend workflow uses Node.js 24, verifies the public CLI seam, renders
+Compose, and builds from the same checkout without a repository or commit
+override. Tags named `kyangc-v*` create a GitHub release containing the CLI
+tarball, compatible extension ZIP, and checksums only after the backend
+contract and final container targets build; no upstream npm package name is
+published.
 
 ## Rollback
 
