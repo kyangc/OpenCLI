@@ -899,7 +899,7 @@ async function connectAttempt() {
       type: "hello",
       contextId: currentContextId,
       version: chrome.runtime.getManifest().version,
-      compatRange: ">=1.8.7"
+      compatRange: ">=2.0.0 <3.0.0"
     });
     startWsKeepalive(thisWs);
   };

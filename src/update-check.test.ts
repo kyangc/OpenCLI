@@ -60,20 +60,21 @@ describe('buildUpdateNotices', () => {
     expect(lines.extension).toBeUndefined();
   });
 
-  it('does not recommend replacing a kyangc build with the upstream npm package', () => {
+  it('does not recommend replacing an independent fork build with the upstream npm package', () => {
     const lines = buildUpdateNotices({
-      cliVersion: '1.8.6-kyangc.2',
+      cliVersion: '2.0.0',
       cache: {
         lastCheck: now,
-        latestVersion: '1.9.0',
-        latestExtensionVersion: '1.0.22.3',
-        currentExtensionVersion: '1.0.22.2',
+        latestVersion: '2.1.0',
+        latestExtensionVersion: '2.1.0',
+        currentExtensionVersion: '2.0.0',
         extensionLastSeenAt: now,
       },
       now,
+      isForkBuild: true,
     });
     expect(lines.cli).toBeUndefined();
-    expect(lines.extension).toContain('v1.0.22.2 → v1.0.22.3');
+    expect(lines.extension).toContain('v2.0.0 → v2.1.0');
   });
 
   it('emits an extension notice when current ext is older and cache is fresh', () => {

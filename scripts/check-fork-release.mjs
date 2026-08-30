@@ -17,59 +17,60 @@ function fail(message) {
 const cliPackage = readJson('package.json');
 const extensionPackage = readJson('extension/package.json');
 const extensionManifest = readJson('extension/manifest.json');
+const cliVersion = cliPackage.version;
 const release = cliPackage.opencliFork?.release;
+const upstreamCliVersion = cliPackage.opencliFork?.upstreamVersion;
+const extensionVersion = extensionPackage.version;
 const extensionRelease = extensionPackage.opencliFork?.release;
+const upstreamExtensionVersion = extensionPackage.opencliFork?.upstreamVersion;
+const stableSemver = /^\d+\.\d+\.\d+$/;
 
-const releaseMatch = typeof release === 'string'
-  ? release.match(/^kyangc-v(\d+\.\d+\.\d+)\.(\d+)$/)
-  : null;
-
-if (!releaseMatch) {
-  fail('package.json opencliFork.release must match kyangc-v<major.minor.patch>.<revision>');
+if (typeof cliVersion !== 'string' || !stableSemver.test(cliVersion)) {
+  fail('CLI version must be an independent stable semver such as 2.0.0');
+} else if (release !== `kyangc-v${cliVersion}`) {
+  fail(`package.json opencliFork.release must be kyangc-v${cliVersion}`);
 } else {
-  const [, upstreamCliVersion, revision] = releaseMatch;
-  const expectedCliVersion = `${upstreamCliVersion}-kyangc.${revision}`;
-  if (cliPackage.version !== expectedCliVersion) {
-    fail(`CLI version ${cliPackage.version} must be ${expectedCliVersion}`);
+  const cliMajor = Number(cliVersion.split('.')[0]);
+  const expectedCompatRange = `>=${cliMajor}.0.0 <${cliMajor + 1}.0.0`;
+  if (extensionPackage.opencli?.compatRange !== expectedCompatRange) {
+    fail(`extension opencli.compatRange must be ${expectedCompatRange}`);
   }
-  if (cliPackage.opencliFork?.upstreamVersion !== upstreamCliVersion) {
-    fail(`opencliFork.upstreamVersion must be ${upstreamCliVersion}`);
-  }
+}
+if (process.env.GITHUB_REF_TYPE === 'tag' && process.env.GITHUB_REF_NAME !== release) {
+  fail(`pushed tag ${process.env.GITHUB_REF_NAME} must match ${release}`);
+}
+if (typeof upstreamCliVersion !== 'string' || !stableSemver.test(upstreamCliVersion)) {
+  fail('package.json opencliFork.upstreamVersion must record a stable upstream semver');
+} else if (upstreamCliVersion === cliVersion) {
+  fail('CLI fork version must not be derived from or equal to the upstream version');
+}
 
-  const extensionMatch = extensionPackage.version?.match(/^(\d+\.\d+\.\d+)-kyangc\.(\d+)$/);
-  const extensionReleaseMatch = typeof extensionRelease === 'string'
-    ? extensionRelease.match(/^kyangc-v(\d+\.\d+\.\d+)\.(\d+)$/)
-    : null;
-  if (!extensionMatch) {
-    fail('extension package version must match <major.minor.patch>-kyangc.<revision>');
-  } else if (!extensionReleaseMatch) {
-    fail(
-      'extension package opencliFork.release must match kyangc-v<major.minor.patch>.<revision>',
-    );
-  } else {
-    const [, upstreamExtensionVersion, extensionRevision] = extensionMatch;
-    const [, , extensionReleaseRevision] = extensionReleaseMatch;
-    if (extensionRevision !== extensionReleaseRevision) {
-      fail(
-        `extension revision ${extensionRevision} must match its release revision ${extensionReleaseRevision}`,
-      );
-    }
-    const expectedManifestVersion = `${upstreamExtensionVersion}.${extensionRevision}`;
-    if (extensionManifest.version !== expectedManifestVersion) {
-      fail(`extension manifest version ${extensionManifest.version} must be ${expectedManifestVersion}`);
-    }
-    const expectedServiceWorker = `dist/background-${expectedManifestVersion}.js`;
-    if (extensionManifest.background?.service_worker !== expectedServiceWorker) {
-      fail(`extension service worker must be ${expectedServiceWorker}`);
-    }
-    if (extensionManifest.version_name !== extensionRelease) {
-      fail('extension manifest version_name must match the extension package release');
-    }
+if (typeof extensionVersion !== 'string' || !stableSemver.test(extensionVersion)) {
+  fail('extension package version must be an independent stable semver such as 2.0.0');
+} else {
+  if (extensionRelease !== `kyangc-ext-v${extensionVersion}`) {
+    fail(`extension package opencliFork.release must be kyangc-ext-v${extensionVersion}`);
   }
+  if (extensionManifest.version !== extensionVersion) {
+    fail(`extension manifest version ${extensionManifest.version} must be ${extensionVersion}`);
+  }
+  const expectedServiceWorker = `dist/background-${extensionVersion}.js`;
+  if (extensionManifest.background?.service_worker !== expectedServiceWorker) {
+    fail(`extension service worker must be ${expectedServiceWorker}`);
+  }
+  if (extensionManifest.version_name !== extensionRelease) {
+    fail('extension manifest version_name must match the extension package release');
+  }
+}
+if (typeof upstreamExtensionVersion !== 'string' || !stableSemver.test(upstreamExtensionVersion)) {
+  fail('extension opencliFork.upstreamVersion must record a stable upstream semver');
+} else if (upstreamExtensionVersion === extensionVersion) {
+  fail('extension fork version must not be derived from or equal to the upstream version');
 }
 
 if (process.exitCode) process.exit(process.exitCode);
 
 console.log(
-  `[kyangc-release] CLI ${release} (${cliPackage.version}), extension ${extensionRelease} (${extensionManifest.version})`,
+  `[kyangc-release] CLI ${release} (upstream ${upstreamCliVersion}), `
+    + `extension ${extensionRelease} (upstream ${upstreamExtensionVersion})`,
 );

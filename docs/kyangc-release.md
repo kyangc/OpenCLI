@@ -9,13 +9,24 @@ versioning the CLI and extension independently. `main` mirrors
 - `main`: fast-forward mirror of upstream.
 - `stable`: the production source of truth.
 - `codex/*`: upgrade and fork feature branches targeting `stable`.
-- CLI release tag: `kyangc-v<upstream-cli-version>.<fork-revision>`.
-- CLI package version: `<upstream-cli-version>-kyangc.<fork-revision>`.
-- Chrome manifest version: `<upstream-extension-version>.<extension-revision>`.
+- Fork CLI release tag: `kyangc-v<fork-version>`.
+- Fork CLI package version: `<fork-version>`.
+- `opencliFork.upstreamVersion` records provenance only; it never determines
+  the fork version.
+- Extension release label: `kyangc-ext-v<extension-version>`.
+- Extension package and Chrome manifest version: `<extension-version>`.
+- The extension's own `opencliFork.upstreamVersion` records its upstream base.
 
-The root package and tag must agree on the CLI release. The extension package
-and Chrome manifest `version_name` must agree on the extension release. The CLI
-and extension revisions do not need to match.
+CLI and extension versions are independent stable semver lines. The root
+package and tag must agree on the CLI release. The extension package, manifest
+`version`, manifest `version_name`, and service-worker filename must agree on
+the extension release. An upstream sync may change only the recorded upstream
+base; it must not reset or derive either fork version.
+
+The npm package name and plugin import surface remain
+`@jackwener/opencli` for compatibility with built-in and installed adapters.
+That legacy name is not a release authority. Renaming it requires a separate
+plugin API migration and is intentionally outside a version-line change.
 
 ## Local runtime layout
 
@@ -75,9 +86,11 @@ Never pull `upstream/main` directly while on `stable`. Mirror upstream into
    git merge --no-ff upstream/main -m "chore: sync upstream main"
    ```
 
-4. Increment the CLI fork revision in `package.json` and `package-lock.json`.
-   Before touching extension metadata, check whether the merge changed the
-   extension:
+4. Bump the independent CLI fork version in `package.json` and
+   `package-lock.json` according to semver, then record the merged upstream CLI
+   version in `opencliFork.upstreamVersion`. Do not copy the upstream version
+   into the fork version. Before touching extension metadata, check whether the
+   merge changed the extension:
 
    ```bash
    git diff --quiet origin/stable...HEAD -- extension/
@@ -86,9 +99,9 @@ Never pull `upstream/main` directly while on `stable`. Mirror upstream into
    If the command exits successfully, leave `extension/package.json`,
    `extension/package-lock.json`, and `extension/manifest.json` unchanged. Do
    not deploy or ask the user to reload the extension. If it reports changes,
-   increment the extension revision in those three files and include the
-   extension deployment and manual reload in the promotion. Finish with
-   `npm run check:fork-release`.
+   bump the extension's independent semver in those three files, update its
+   recorded upstream extension base, and include the extension deployment and
+   manual reload in the promotion. Finish with `npm run check:fork-release`.
 
 5. Run the promotion gate below, push the candidate branch, and open a PR
    targeting `stable`. Do not tag or update the local runtime from `main`.

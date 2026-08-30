@@ -17,7 +17,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { PKG_VERSION } from './version.js';
+import { IS_FORK_BUILD, PKG_VERSION } from './version.js';
 
 const CACHE_DIR = path.join(os.homedir(), '.opencli');
 const CACHE_FILE = path.join(CACHE_DIR, 'update-check.json');
@@ -87,14 +87,11 @@ function isCI(): boolean {
   return !!(process.env.CI || process.env.CONTINUOUS_INTEGRATION);
 }
 
-function isKyangcBuild(version: string): boolean {
-  return /-kyangc\.\d+$/.test(version);
-}
-
 interface NoticeInputs {
   cliVersion: string;
   cache: UpdateCache | null;
   now: number;
+  isForkBuild?: boolean;
 }
 
 interface NoticeLines {
@@ -103,10 +100,10 @@ interface NoticeLines {
 }
 
 /** Pure function: derive notice text from cache state. Exported for tests. */
-function buildUpdateNotices({ cliVersion, cache, now }: NoticeInputs): NoticeLines {
+function buildUpdateNotices({ cliVersion, cache, now, isForkBuild = false }: NoticeInputs): NoticeLines {
   if (!cache) return {};
   const lines: NoticeLines = {};
-  if (!isKyangcBuild(cliVersion) && cache.latestVersion && isNewer(cache.latestVersion, cliVersion)) {
+  if (!isForkBuild && cache.latestVersion && isNewer(cache.latestVersion, cliVersion)) {
     lines.cli =
       `\n  Update available: v${cliVersion} → v${cache.latestVersion}\n` +
       `  Run: npm install -g @jackwener/opencli\n`;
@@ -142,6 +139,7 @@ export function registerUpdateNoticeOnExit(): void {
       cliVersion: PKG_VERSION,
       cache: _cache,
       now: Date.now(),
+      isForkBuild: IS_FORK_BUILD,
     });
     if (!cli && !extension) return;
     try {
@@ -194,7 +192,7 @@ export function checkForUpdateBackground(): void {
   void (async () => {
     try {
       const updates: Partial<UpdateCache> = { lastCheck: Date.now() };
-      if (!isKyangcBuild(PKG_VERSION)) {
+      if (!IS_FORK_BUILD) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 3000);
         const res = await fetch(NPM_REGISTRY_URL, {
