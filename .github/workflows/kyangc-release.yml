@@ -37,13 +37,13 @@ jobs:
         run: docker compose --env-file services/opencli-backend/.env.example -f services/opencli-backend/compose.yaml config --quiet
 
       - name: Build backend image from the tagged checkout
-        run: docker build --target backend --tag local/opencli-backend:2.0.1.1 -f services/opencli-backend/Dockerfile .
+        run: docker build --target backend --tag local/opencli-backend:2.0.2.1 -f services/opencli-backend/Dockerfile .
 
       - name: Build Chromium image from the tagged checkout
         run: docker build --target chromium --tag local/opencli-chromium:2.0.0.1 -f services/opencli-backend/Dockerfile .
 
       - name: Run provider-neutral Compose smoke
-        run: sh services/opencli-backend/scripts/smoke-compose.sh 2.0.1 2.0.0
+        run: sh services/opencli-backend/scripts/smoke-compose.sh 2.0.2 2.0.0
 
   release:
     needs: backend-contract
