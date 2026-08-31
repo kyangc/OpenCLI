@@ -7,7 +7,7 @@
   },
   "opencliFork": {
     "release": "kyangc-ext-v2.0.0",
-    "upstreamVersion": "1.0.23"
+    "upstreamVersion": "1.0.24"
   },
   "type": "module",
   "scripts": {

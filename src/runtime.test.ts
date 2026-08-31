@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { BrowserBridge, CDPBridge } from './browser/index.js';
 import type { IPage } from './types.js';
-import { browserSession, type IBrowserFactory } from './runtime.js';
+import { browserSession, getBrowserFactory, type IBrowserFactory } from './runtime.js';
 
 describe('browserSession', () => {
   it('forwards command access to the browser factory', async () => {
@@ -19,5 +20,21 @@ describe('browserSession', () => {
     await browserSession(TestBrowserFactory, async () => undefined, { access: 'read' });
 
     expect(received?.access).toBe('read');
+  });
+});
+
+describe('getBrowserFactory', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('uses BrowserBridge for regular sites by default', () => {
+    expect(getBrowserFactory('xianyu')).toBe(BrowserBridge);
+  });
+
+  it('uses CDPBridge when OPENCLI_CDP_ENDPOINT is configured', () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'http://127.0.0.1:9333');
+
+    expect(getBrowserFactory('xianyu')).toBe(CDPBridge);
   });
 });
