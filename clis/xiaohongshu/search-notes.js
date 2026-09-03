@@ -24,14 +24,13 @@ function fieldsFrom(rows) {
 function sanitizedText(value, limit) {
     if (typeof value !== 'string')
         return '';
-    return value
+    const sanitized = value
         .replace(/\0/g, '')
         .replace(/https?:\/\/\S+/giu, '[链接已移除]')
         .replace(/\bxsec_token\s*[=:]\s*[^\s&]+/giu, '[令牌已移除]')
         .replace(/\s+/gu, ' ')
-        .trim()
-        .slice(0, limit)
         .trim();
+    return [...sanitized].slice(0, limit).join('').trim();
 }
 
 function canonicalNoteUrl(value) {
