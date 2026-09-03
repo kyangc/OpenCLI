@@ -12,9 +12,9 @@
 > [!IMPORTANT]
 > 这是 [jackwener/opencli](https://github.com/jackwener/opencli) 的
 > **kyangc 生产 fork**。请从本仓库安装 fork release，不要把 npm 或上游
-> Chrome Web Store 当作 fork 的发布源。当前版本线为 CLI `2.0.1`
->（`kyangc-v2.0.1`）和扩展 `2.0.0`（`kyangc-ext-v2.0.0`），对应的上游基线
-> 分别是 `1.8.7` 和扩展 `1.0.23`。
+> Chrome Web Store 当作 fork 的发布源。当前版本线为 CLI `2.0.3`
+>（`kyangc-v2.0.3`）和扩展 `2.0.0`（`kyangc-ext-v2.0.0`），对应的上游基线
+> 分别是 `1.8.8` 和扩展 `1.0.24`。
 
 OpenCLI 可以用同一套 CLI 做三类事情：
 
@@ -73,12 +73,12 @@ release 独立 npm prefix，再把该 prefix 加入 `PATH`；不要按包名安�
 
 ```bash
 node --version
-grep 'jackwener-opencli-2.0.1.tgz$' SHA256SUMS | sha256sum -c -
+grep 'jackwener-opencli-2.0.3.tgz$' SHA256SUMS | sha256sum -c -
 # macOS：把管道后的命令换成 `shasum -a 256 -c -`
 
-OPENCLI_RELEASE=kyangc-v2.0.1
+OPENCLI_RELEASE=kyangc-v2.0.3
 OPENCLI_PREFIX="$HOME/.local/share/opencli/releases/$OPENCLI_RELEASE/runtime"
-npm install --prefix "$OPENCLI_PREFIX" --global ./jackwener-opencli-2.0.1.tgz
+npm install --prefix "$OPENCLI_PREFIX" --global ./jackwener-opencli-2.0.3.tgz
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$OPENCLI_PREFIX/bin/opencli" "$HOME/.local/bin/opencli"
 opencli --version

@@ -8,6 +8,25 @@ const SECOND_SIGNED_URL = `https://www.xiaohongshu.com/search_result/${SECOND_NO
 const THIRD_NOTE_ID = '69c131cb000000002800be4e';
 const THIRD_SIGNED_URL = `https://www.xiaohongshu.com/search_result/${THIRD_NOTE_ID}?xsec_token=third-private-token`;
 
+function hasUnpairedSurrogate(value) {
+    for (let index = 0; index < value.length; index += 1) {
+        const codeUnit = value.charCodeAt(index);
+        if (codeUnit >= 0xD800 && codeUnit <= 0xDBFF) {
+            const next = value.charCodeAt(index + 1);
+            if (next >= 0xDC00 && next <= 0xDFFF) {
+                index += 1;
+            }
+            else {
+                return true;
+            }
+        }
+        else if (codeUnit >= 0xDC00 && codeUnit <= 0xDFFF) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function pageWithOneNote(detail = {
     pageUrl: SIGNED_URL,
     securityBlock: false,
@@ -244,6 +263,39 @@ describe('xiaohongshu search-notes', () => {
         expect(persisted).not.toContain('xsec_token');
         expect(persisted).not.toContain('private-token');
         expect(result[0].excerpt.length).toBeLessThanOrEqual(560);
+    });
+
+    it('truncates persisted text on Unicode code-point boundaries', async () => {
+        const astralCharacter = '🌧';
+        const page = pageWithOneNote({
+            pageUrl: SIGNED_URL,
+            securityBlock: false,
+            loginWall: false,
+            notFound: false,
+            title: `${'题'.repeat(179)}${astralCharacter}尾`,
+            desc: `${'内'.repeat(559)}${astralCharacter}尾`,
+            author: `${'作'.repeat(119)}${astralCharacter}尾`,
+            likes: '12',
+            collects: '4',
+            comments: '2',
+            tags: [],
+        });
+
+        const result = await command.func(page, {
+            query: '里斯本 雨天安排',
+            limit: 1,
+        });
+        const roundTripped = JSON.parse(JSON.stringify(result));
+
+        for (const [field, limit] of [
+            ['title', 180],
+            ['author', 120],
+            ['excerpt', 560],
+        ]) {
+            expect([...roundTripped[0][field]]).toHaveLength(limit);
+            expect(roundTripped[0][field].endsWith(astralCharacter)).toBe(true);
+            expect(hasUnpairedSurrogate(roundTripped[0][field])).toBe(false);
+        }
     });
 
     it('keeps usable notes when one detail is unavailable', async () => {

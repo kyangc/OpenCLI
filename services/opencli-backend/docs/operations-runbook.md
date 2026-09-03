@@ -112,7 +112,7 @@ curl -fsS http://192.168.50.10:18080/v1/control \
    /usr/local/bin/docker exec opencli-backend \
      node /app/scripts/smoke-deployment.mjs \
        --base-url http://127.0.0.1:8080 \
-       --expected-daemon-version 2.0.2 \
+       --expected-daemon-version 2.0.3 \
        --expected-extension-version 2.0.0 \
        --timeout-seconds 180
    ```
