@@ -78,10 +78,10 @@ jobs:
           node-version: '24'
 
       - name: Build backend image from this checkout
-        run: docker build --target backend --tag local/opencli-backend:2.0.2.1 -f services/opencli-backend/Dockerfile .
+        run: docker build --target backend --tag local/opencli-backend:2.0.3.1 -f services/opencli-backend/Dockerfile .
 
       - name: Build Chromium image from this checkout
         run: docker build --target chromium --tag local/opencli-chromium:2.0.0.1 -f services/opencli-backend/Dockerfile .
 
       - name: Run provider-neutral Compose smoke
-        run: sh services/opencli-backend/scripts/smoke-compose.sh 2.0.2 2.0.0
+        run: sh services/opencli-backend/scripts/smoke-compose.sh 2.0.3 2.0.0

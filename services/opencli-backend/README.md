@@ -36,7 +36,7 @@ Backend workflow 和 `kyangc-v*` 发布 Gate 会从同一个 checkout 构建两�
 镜像，在隔离的临时 profile 中启动 Compose，然后运行：
 
 ```bash
-sh services/opencli-backend/scripts/smoke-compose.sh 2.0.2 2.0.0
+sh services/opencli-backend/scripts/smoke-compose.sh 2.0.3 2.0.0
 ```
 
 该编排显式设置 `OPENCLI_SESSION_CHECK_SITES=disabled`，只读访问
@@ -51,7 +51,7 @@ smoke 会核对 daemon 与扩展版本、Bridge、至少一个已连接 profile�
 ```bash
 docker exec opencli-backend node /app/scripts/smoke-deployment.mjs \
   --base-url http://127.0.0.1:8080 \
-  --expected-daemon-version 2.0.2 \
+  --expected-daemon-version 2.0.3 \
   --expected-extension-version 2.0.0 \
   --timeout-seconds 180
 ```
