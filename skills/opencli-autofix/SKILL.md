@@ -1,14 +1,28 @@
 ---
 name: opencli-autofix
-description: Automatically fix broken OpenCLI adapters when commands fail. Load this skill when an opencli command fails — it guides you through collecting a trace artifact, patching the adapter, retrying, and filing an upstream GitHub issue after a verified fix. Works with any AI agent.
+description: Diagnose and repair a broken OpenCLI adapter when the user has authorized adapter repair. Includes bounded verification and optional issue reporting.
 allowed-tools: Bash(opencli:*), Bash(gh:*), Read, Edit, Write
 ---
 
-# OpenCLI AutoFix — Automatic Adapter Self-Repair
+# OpenCLI AutoFix — Authorized Adapter Repair
 
-When an `opencli` command fails because a website changed its DOM, API, or response schema, **automatically diagnose, fix the adapter, and retry** — don't just report the error.
+Use this workflow for an authorized adapter repair. A failed read, search, or
+audit does not authorize changing the adapter. Diagnose within the original
+task and report the blocker when repair is outside its scope.
 
 ## Safety Boundaries
+
+**Before any reproduction, trace capture, or verification:**
+
+- Establish repair scope and command access (`read` or `write`) from current
+  command metadata and the task. Skill instructions do not expand authorization.
+- Read commands may be repeated within the stated budget. For write commands,
+  read back the original outcome first; an unknown result is not permission to
+  replay. Prefer a local fixture or documented dry-run. A live write needs
+  existing authorization for that specific action and evidence it will not
+  duplicate a completed effect. If either is missing, stop that write and report.
+- Apply this rule to every command example below, including trace collection,
+  exploratory alternatives, browser fallback, and the final retry.
 
 **Before starting any repair, check these hard stops:**
 
@@ -30,7 +44,7 @@ opencli doctor    # Verify extension + daemon connectivity
 
 ## When to Use This Skill
 
-Use when `opencli <site> <command>` fails with repairable errors:
+Within an authorized repair task, investigate these errors:
 - **SELECTOR** — element not found (DOM changed)
 - **EMPTY_RESULT** — no data returned (API response changed)
 - **API_ERROR** / **NETWORK** — endpoint moved or broke
@@ -51,7 +65,8 @@ Only proceed to Step 1 if the empty/selector-missing result is **reproducible ac
 
 ## Step 1: Collect Trace Context
 
-Run the failing command with failure-retained trace enabled:
+Reuse an existing trace first. If reproduction is needed and the access/replay
+check above permits it, capture a failure-retained trace:
 
 ```bash
 opencli <site> <command> [args...] --trace retain-on-failure 2>trace-error.yaml
@@ -206,7 +221,9 @@ If it still fails, go back to Step 1 and collect a fresh trace. You have a budge
 
 ## Step 6: File an Upstream Issue
 
-If the retry **passes**, the local adapter has drifted from upstream. File a GitHub issue so the fix flows back to `jackwener/OpenCLI`.
+After verified repair, prepare an issue only when useful for the task. Publish
+only when the user authorized issue reporting. Select the target repository
+from the user request or the current fork context; do not assume upstream.
 
 **Do NOT file for:**
 - `AUTH_REQUIRED`, `BROWSER_CONNECT`, `ARGUMENT`, `CONFIG` — environment/usage issues, not adapter bugs
@@ -246,14 +263,17 @@ OpenCLI autofix repaired this adapter locally, and the retry passed.
 _Issue filed by OpenCLI autofix after a verified local repair._
 ```
 
-2. **Ask the user before filing.** Show them the draft title and body. Only proceed if they confirm.
+2. Check existing issue-publication authorization and the target repository.
+   If either is missing, show the concrete draft and ask only for what is missing.
+   If both are established, continue without asking again. Sanitize trace details.
 
-3. If the user approves and `gh auth status` succeeds:
+3. With publication authorized and `gh auth status` successful, use the verified
+   target and an exact, sanitized body file:
 
 ```bash
-gh issue create --repo jackwener/OpenCLI \
+gh issue create --repo "$target_repo" \
   --title "[autofix] <site>/<command>: <error_code>" \
-  --body "<the body above>"
+  --body-file "$issue_body_file"
 ```
 
 If `gh` is not installed or not authenticated, tell the user and skip — do not error out.

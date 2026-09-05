@@ -21,7 +21,10 @@ The sitemap is **prior knowledge**, not ground truth. It should reduce blind cli
    - One matching `workflows/<task-id>.md` for the user goal.
    - `pitfalls.md` only when blocked or warned by the workflow.
 3. Prefer the workflow's **Best path**. If it names an adapter such as `opencli twitter post`, use that before raw browser actions.
-4. If the adapter is unavailable or fails, use the **Fallback path** browser workflow.
+4. If the adapter is unavailable or fails, use the **Fallback path** only
+   within the task authorization. For a failed write, read back its outcome
+   before any fallback that could repeat the effect; an unknown result is a
+   blocker for that write, not permission to replay it.
 5. After each navigation or state-changing action, refresh `state` and compare the workflow's `state_signature`.
 6. If reality disagrees, trust reality, continue probing, and write a local stale note or draft patch.
 7. If an action recovery includes `adapter_health_update: <adapter> -> suspect|broken`, update the local overlay workflow that references that adapter so future agents go straight to the fallback path.

@@ -1,6 +1,6 @@
 ---
 name: opencli-usage
-description: Use at the start of any OpenCLI session — this is the top-level map of what `opencli` can do, how to discover adapters, what flags and output formats are universal, and which specialized skill to load next. Point here when an agent asks "what can opencli do?" or "how do I find the right command?".
+description: Orient users to OpenCLI capabilities or discover the right command when the site or workflow is unclear.
 allowed-tools: Bash(opencli:*), Read
 ---
 
@@ -16,6 +16,9 @@ OpenCLI turns any website, Electron desktop app, or external CLI into a uniform 
 - **External CLI passthrough** — `opencli gh`, `opencli docker`, `opencli vercel`, etc. Managed via `opencli external install <name>` (auto-install from `external-clis.yaml`) or `opencli external register <name>` (bring your own).
 
 ## Install
+
+Use these only for a requested installation. Preserve an existing managed or
+fork-release runtime and follow its maintenance instructions when upgrading.
 
 ```bash
 # npm global
@@ -88,7 +91,10 @@ A few commands override the default via `cmd.defaultFormat` (e.g. chat commands 
 
 ## Self-repair
 
-When an adapter command fails because the site changed (selectors drifted, API rotated, response schema shifted), re-run with `--trace retain-on-failure`. The error envelope includes a `trace` block pointing at `summary.md`; patch only the `adapterSourcePath` from that summary and retry. Max 3 repair rounds. The full flow is in `opencli-autofix`.
+When an adapter fails, diagnose within the current task. Use `opencli-autofix`
+only when adapter repair is authorized. Reuse existing trace evidence; any
+reproduction or verification must respect its read/write replay checks. A
+failed read or audit does not authorize patching adapters or publishing issues.
 
 ## Writing your own adapter
 
