@@ -4,6 +4,7 @@ import { getRegistry } from '@jackwener/opencli/registry';
 import './search.js';
 import './hotel-suggest.js';
 import './hotel-search.js';
+import './hotel-discover.js';
 import './flight.js';
 import './flight-round.js';
 import './train.js';
@@ -16,6 +17,7 @@ import './package.js';
 import './attraction.js';
 import { __test__ as flightTest } from './flight.js';
 import { __test__ as hotelSearchTest } from './hotel-search.js';
+import { __test__ as hotelDiscoverTest } from './hotel-discover.js';
 import {
     buildAttractionExtractJs,
     buildAttractionPlaceUrl,
@@ -457,6 +459,7 @@ describe('ctrip mapHotelRow', () => {
 
 describe('ctrip hotel-search command (registry-level)', () => {
     const cmd = getRegistry().get('ctrip/hotel-search');
+    const discoverCmd = getRegistry().get('ctrip/hotel-discover');
 
     const SHANGHAI_HOTEL = {
         hotelInfo: {
@@ -475,6 +478,13 @@ describe('ctrip hotel-search command (registry-level)', () => {
         expect(String(cmd.strategy)).toContain('cookie');
         expect(cmd.navigateBefore).toBe(false);
         expect(cmd.domain).toBe('hotels.ctrip.com');
+        expect(cmd.args.find((arg) => arg.name === 'city')).toMatchObject({ required: true, positional: true });
+        expect(cmd.args.some((arg) => arg.name === 'query')).toBe(false);
+        expect(discoverCmd).toMatchObject({
+            access: 'read', browser: true, navigateBefore: false, domain: 'hotels.ctrip.com', defaultFormat: 'json',
+        });
+        expect(discoverCmd.columns).toBeUndefined();
+        expect(discoverCmd.args.find((arg) => arg.name === 'query')).toMatchObject({ required: true });
     });
 
     it('resolves one city and returns verified bounded discovery candidates', async () => {
@@ -508,7 +518,7 @@ describe('ctrip hotel-search command (registry-level)', () => {
             },
         ]);
 
-        const result = await cmd.func(page, {
+        const result = await discoverCmd.func(page, {
             query: '札幌', checkin: '2026-10-15', checkout: '2026-10-18', limit: 5,
         });
 
@@ -561,8 +571,8 @@ describe('ctrip hotel-search command (registry-level)', () => {
             query: '札幌', checkin: '2026-10-15', checkout: '2026-10-18', limit: 5,
         };
 
-        const ambiguous = await cmd.func(ambiguousPage, args);
-        const none = await cmd.func(emptyPage, { ...args, query: 'not-a-place' });
+        const ambiguous = await discoverCmd.func(ambiguousPage, args);
+        const none = await discoverCmd.func(emptyPage, { ...args, query: 'not-a-place' });
 
         expect(ambiguous).toEqual({
             outcome: 'ambiguous_destination',
@@ -606,7 +616,7 @@ describe('ctrip hotel-search command (registry-level)', () => {
             },
         ]);
 
-        await expect(cmd.func(page, {
+        await expect(discoverCmd.func(page, {
             query: '札幌', checkin: '2026-10-15', checkout: '2026-10-18', limit: 5,
         })).rejects.toMatchObject({
             code: 'COMMAND_EXEC', message: expect.stringContaining('did not match'),
@@ -650,7 +660,7 @@ describe('ctrip hotel-search command (registry-level)', () => {
         } } };
 
         const extract = () => dom.window.Function(
-            `return (${hotelSearchTest.buildDiscoveryExtractJs(5)})`,
+            `return (${hotelDiscoverTest.buildDiscoveryExtractJs(5)})`,
         )();
         const extracted = extract();
 
@@ -687,7 +697,7 @@ describe('ctrip hotel-search command (registry-level)', () => {
             { scope_valid: true, observed_scope: observedScope, items: [] },
         ]);
 
-        const result = await cmd.func(page, {
+        const result = await discoverCmd.func(page, {
             query: '札幌', checkin: '2026-10-15', checkout: '2026-10-18', limit: 5,
         });
 

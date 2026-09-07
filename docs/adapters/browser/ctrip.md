@@ -1,6 +1,6 @@
 # Ctrip (携程)
 
-**Mode**: 🌐 Public (`search`, `hotel-suggest`) · 🖥️ Browser + Cookie (`hotel-search`, `hotel`, `flight`, `flight-round`, `train`, `bus`, `ferry`, `cruise`, `tour`, `package`, `attraction`)
+**Mode**: 🌐 Public (`search`, `hotel-suggest`) · 🖥️ Browser + Cookie (`hotel-search`, `hotel-discover`, `hotel`, `flight`, `flight-round`, `train`, `bus`, `ferry`, `cruise`, `tour`, `package`, `attraction`)
 **Domain**: `ctrip.com`
 
 Public destination + hotel-context suggestion lookup against the
@@ -15,6 +15,7 @@ and `flights.ctrip.com`.
 | `opencli ctrip search` | Public | Suggest cities, scenic spots, railway stations and landmarks |
 | `opencli ctrip hotel-suggest` | Public | Suggest cities, business areas and individual hotels |
 | `opencli ctrip hotel-search` | Browser (cookie) | List hotels for a city + check-in/out date range |
+| `opencli ctrip hotel-discover` | Browser (cookie) | Resolve one destination city and return a verified hotel candidate envelope |
 | `opencli ctrip hotel` | Browser (cookie) | Single-hotel detail: rating breakdown, facilities, check-in/out policy |
 | `opencli ctrip flight` | Browser (cookie) | One-way flight search by IATA route + departure date |
 | `opencli ctrip flight-round` | Browser (cookie) | Round-trip flight search by IATA route + depart/return dates |
@@ -39,7 +40,7 @@ opencli ctrip hotel-suggest 陆家嘴 --limit 5
 opencli ctrip hotel-search 2 --checkin 2026-05-20 --checkout 2026-05-21 --limit 10
 
 # Hotel discovery (resolve one city, then list hotels in the same command/job)
-opencli ctrip hotel-search --query 札幌 --checkin 2026-10-15 --checkout 2026-10-18 --limit 5
+opencli ctrip hotel-discover --query 札幌 --checkin 2026-10-15 --checkout 2026-10-18 --limit 5
 
 # Single-hotel detail (hotel id from `hotel-suggest`)
 opencli ctrip hotel 375539
@@ -99,19 +100,8 @@ Both suggest commands share a uniform column shape:
 
 ## Hotel Listing Columns (`hotel-search`)
 
-The numeric `<city>` form preserves the legacy array below. The explicit
-`--query` discovery form first resolves only City suggestions. A unique city
-navigates to the listing and returns a small envelope with `outcome: results`,
-`resolved_destination`, verified `observed_scope`, whitelisted `items`, and an
-empty `candidates` list. Ambiguous or missing destinations return
-`ambiguous_destination` or `no_destination` without navigating; ambiguous
-responses contain at most five safe city candidates.
-
-Discovery items contain only hotel identity and listing context
-(`hotel_id`, `name`, canonical `url`, `city`, `district`, `rating`,
-`review_count`, `position`, and three-state `promoted`). They intentionally omit
-prices, currency, tracking identifiers, and raw SSR objects. Guest scope may be
-visible on the listing but is not a verified quote.
+The required numeric `<city>` form preserves the legacy array and default table
+output below.
 
 | Column | Notes |
 |--------|-------|
@@ -126,11 +116,28 @@ visible on the listing but is not a verified quote.
 | `price`, `currency` | First room's quote; `null` when no rooms remain at the searched date |
 | `url` | Canonical detail URL or `null` if `hotelId` is missing |
 
-Args:
-- `<city>` (positional) — numeric Ctrip city ID (discover via `ctrip search` / `ctrip hotel-suggest`); keeps the legacy array output.
-- `--query` — destination text for the discovery envelope; mutually exclusive with `<city>`.
+`hotel-search` args:
+- `<city>` (positional, required) — numeric Ctrip city ID (discover via `ctrip search` / `ctrip hotel-suggest`).
 - `--checkin`, `--checkout` (required) — `YYYY-MM-DD`, validated as real calendar dates with `checkin < checkout`.
 - `--limit` (1-30, default 10) — Ctrip's SSR first page ships ~13 entries (10 organic + ~3 promoted). Larger limits are not currently supported because the server ignores the URL `pageSize` param.
+
+## Hotel Discovery Envelope (`hotel-discover`)
+
+The separate `--query` discovery command resolves only City suggestions. A unique
+city navigates to the listing and returns a small JSON envelope with `outcome: results`,
+`resolved_destination`, verified `observed_scope`, whitelisted `items`, and an
+empty `candidates` list. Ambiguous or missing destinations return
+`ambiguous_destination` or `no_destination` without navigating; ambiguous
+responses contain at most five safe city candidates.
+
+Discovery items contain only hotel identity and listing context
+(`hotel_id`, `name`, canonical `url`, `city`, `district`, `rating`,
+`review_count`, `position`, and three-state `promoted`). They intentionally omit
+prices, currency, tracking identifiers, and raw SSR objects. Guest scope may be
+visible on the listing but is not a verified quote.
+
+`hotel-discover` uses the same date and limit bounds, requires `--query`, and
+defaults to JSON because its result is an envelope rather than table rows.
 
 ## Flight Columns (`flight`)
 
@@ -357,7 +364,7 @@ already reports a representative nightly price per hotel.
 
 ## Caveats (browser-mode commands)
 
-- **Cookie required**: `hotel-search` / `flight` use `Strategy.COOKIE` against
+- **Cookie required**: `hotel-search` / `hotel-discover` / `flight` use `Strategy.COOKIE` against
   `hotels.ctrip.com` / `flights.ctrip.com`. If Ctrip serves a captcha redirect
   (suspected bot), an `AuthRequiredError` is raised — complete the captcha in
   your live browser session and retry.
