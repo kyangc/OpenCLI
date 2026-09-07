@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyExecution } from '../src/executor.mjs';
+import { jobResult } from '../src/job-view.mjs';
 
 const base = {
   exitCode: 0,
@@ -56,4 +57,28 @@ test('fails closed when a successful command returns invalid JSON', () => {
   const result = classifyExecution({ ...base, stdout: '[{"rank":1' });
   assert.equal(result.status, 'failed');
   assert.equal(result.errorCode, 'invalid_json_output');
+});
+
+test('projects a succeeded empty_result as an empty output without dropping diagnostics', () => {
+  const result = jobResult({
+    id: 'job-1',
+    status: 'succeeded',
+    exitCode: 66,
+    errorCode: 'empty_result',
+    stdout: '',
+    stderr: 'No visible rows matched',
+    outputTruncated: false,
+    durationMs: 42,
+  });
+
+  assert.deepEqual(result, {
+    id: 'job-1',
+    status: 'succeeded',
+    exitCode: 66,
+    errorCode: 'empty_result',
+    output: [],
+    stderr: 'No visible rows matched',
+    outputTruncated: false,
+    durationMs: 42,
+  });
 });

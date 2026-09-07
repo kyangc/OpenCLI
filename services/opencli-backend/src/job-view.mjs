@@ -15,11 +15,14 @@ export function publicJob(job) {
 }
 
 export function jobResult(job) {
-  let output = job.stdout;
-  try {
-    output = JSON.parse(job.stdout);
-  } catch {
-    // Retain non-JSON OpenCLI output as text.
+  const isEmptyResult = job.status === 'succeeded' && job.errorCode === 'empty_result';
+  let output = isEmptyResult ? [] : job.stdout;
+  if (!isEmptyResult) {
+    try {
+      output = JSON.parse(job.stdout);
+    } catch {
+      // Retain non-JSON OpenCLI output as text.
+    }
   }
   return {
     id: job.id,

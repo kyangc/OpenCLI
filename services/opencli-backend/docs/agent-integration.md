@@ -134,7 +134,7 @@ MCP 的 `tools/list` 会根据 token scope 自动裁剪。缺少的工具通常�
 | `queued` | 否 | 等待并退避轮询 |
 | `running` | 否 | 等待；不要重复提交 |
 | `cancel_requested` | 否 | 等待终态；取消是 best effort |
-| `succeeded` | 是 | 消费 `result.output`；`errorCode=empty_result` 仍是成功 |
+| `succeeded` | 是 | 消费 `result.output`；`errorCode=empty_result` 仍是成功，且 `output=[]`，诊断字段仍保留 |
 | `failed` | 是 | 按 `errorCode` 处理，必要时用新 key 创建新 attempt |
 | `needs_login` | 是 | 停止自动重试，通知人工登录；恢复后用新 key 重试 |
 | `cancelled` | 是 | 结束当前 attempt |
