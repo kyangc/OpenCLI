@@ -38,6 +38,9 @@ opencli ctrip hotel-suggest 陆家嘴 --limit 5
 # Hotel listing (city ID from `search` / `hotel-suggest`)
 opencli ctrip hotel-search 2 --checkin 2026-05-20 --checkout 2026-05-21 --limit 10
 
+# Hotel discovery (resolve one city, then list hotels in the same command/job)
+opencli ctrip hotel-search --query 札幌 --checkin 2026-10-15 --checkout 2026-10-18 --limit 5
+
 # Single-hotel detail (hotel id from `hotel-suggest`)
 opencli ctrip hotel 375539
 opencli ctrip hotel 375539 -f json
@@ -96,6 +99,20 @@ Both suggest commands share a uniform column shape:
 
 ## Hotel Listing Columns (`hotel-search`)
 
+The numeric `<city>` form preserves the legacy array below. The explicit
+`--query` discovery form first resolves only City suggestions. A unique city
+navigates to the listing and returns a small envelope with `outcome: results`,
+`resolved_destination`, verified `observed_scope`, whitelisted `items`, and an
+empty `candidates` list. Ambiguous or missing destinations return
+`ambiguous_destination` or `no_destination` without navigating; ambiguous
+responses contain at most five safe city candidates.
+
+Discovery items contain only hotel identity and listing context
+(`hotel_id`, `name`, canonical `url`, `city`, `district`, `rating`,
+`review_count`, `position`, and three-state `promoted`). They intentionally omit
+prices, currency, tracking identifiers, and raw SSR objects. Guest scope may be
+visible on the listing but is not a verified quote.
+
 | Column | Notes |
 |--------|-------|
 | `rank` | 1-based position in upstream list |
@@ -110,7 +127,8 @@ Both suggest commands share a uniform column shape:
 | `url` | Canonical detail URL or `null` if `hotelId` is missing |
 
 Args:
-- `<city>` (positional, required) — numeric Ctrip city ID (discover via `ctrip search` / `ctrip hotel-suggest`).
+- `<city>` (positional) — numeric Ctrip city ID (discover via `ctrip search` / `ctrip hotel-suggest`); keeps the legacy array output.
+- `--query` — destination text for the discovery envelope; mutually exclusive with `<city>`.
 - `--checkin`, `--checkout` (required) — `YYYY-MM-DD`, validated as real calendar dates with `checkin < checkout`.
 - `--limit` (1-30, default 10) — Ctrip's SSR first page ships ~13 entries (10 organic + ~3 promoted). Larger limits are not currently supported because the server ignores the URL `pageSize` param.
 

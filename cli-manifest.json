@@ -9273,9 +9273,15 @@
       {
         "name": "city",
         "type": "str",
-        "required": true,
+        "required": false,
         "positional": true,
         "help": "Numeric Ctrip city ID (use `ctrip search` or `ctrip hotel-suggest` to discover)"
+      },
+      {
+        "name": "query",
+        "type": "str",
+        "required": false,
+        "help": "Destination query resolved to one Ctrip city inside this command"
       },
       {
         "name": "checkin",

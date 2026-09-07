@@ -82,6 +82,12 @@ const SHANGHAI_CITY = {
     lat: 0, lon: 0, gLat: 0, gLon: 0, gdLat: 31.2304, gdLon: 121.4737,
 };
 
+const SAPPORO_CITY = {
+    id: '641', type: 'IntlCity', word: '札幌', cityId: 641, cityName: '札幌',
+    provinceName: '北海道', countryName: '日本', displayName: '札幌, 日本', displayType: '城市',
+    eName: 'Sapporo', commentScore: 0,
+};
+
 const FORBIDDEN_CITY = {
     id: '4189051', type: 'Markland', word: '故宫博物院', cityId: 1, cityName: '北京',
     provinceName: '北京', countryName: '中国', displayName: '故宫博物院, 北京, 中国',
@@ -469,6 +475,229 @@ describe('ctrip hotel-search command (registry-level)', () => {
         expect(String(cmd.strategy)).toContain('cookie');
         expect(cmd.navigateBefore).toBe(false);
         expect(cmd.domain).toBe('hotels.ctrip.com');
+    });
+
+    it('resolves one city and returns verified bounded discovery candidates', async () => {
+        vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(ok({
+            Result: true, ErrorCode: 0, Response: { searchResults: [SAPPORO_CITY] },
+        }))));
+        const page = createPageMock([
+            'content',
+            {
+                scope_valid: true,
+                observed_scope: {
+                    city_id: 641,
+                    city_name: '札幌',
+                    destination_input_value: '札幌',
+                    city_type: 'City',
+                    checkin: '2026-10-15',
+                    checkout: '2026-10-18',
+                    nights: 3,
+                },
+                items: [{
+                    hotel_id: '705159',
+                    name: '札幌格兰大酒店',
+                    url: 'https://hotels.ctrip.com/hotels/detail/?hotelid=705159',
+                    city: '札幌',
+                    district: '札幌市中心',
+                    rating: 4.6,
+                    review_count: 1200,
+                    position: 1,
+                    promoted: false,
+                }],
+            },
+        ]);
+
+        const result = await cmd.func(page, {
+            query: '札幌', checkin: '2026-10-15', checkout: '2026-10-18', limit: 5,
+        });
+
+        expect(result).toEqual({
+            outcome: 'results',
+            resolved_destination: {
+                city_id: 641,
+                name: '札幌',
+                province: '北海道',
+                country: '日本',
+            },
+            observed_scope: {
+                city_id: 641,
+                city_name: '札幌',
+                destination_input_value: '札幌',
+                city_type: 'City',
+                checkin: '2026-10-15',
+                checkout: '2026-10-18',
+                nights: 3,
+            },
+            items: [expect.objectContaining({ hotel_id: '705159', position: 1 })],
+            candidates: [],
+        });
+        expect(page.goto).toHaveBeenCalledTimes(1);
+        expect(page.goto.mock.calls[0][0]).toContain('city=641');
+    });
+
+    it('returns bounded ambiguous/no-destination outcomes without navigation', async () => {
+        const otherCity = {
+            ...SAPPORO_CITY, id: '642', cityId: 642, cityName: '札幌郡', displayName: '札幌郡, 日本',
+        };
+        vi.stubGlobal('fetch', vi.fn()
+            .mockResolvedValueOnce(ok({
+                Result: true,
+                ErrorCode: 0,
+                Response: { searchResults: [
+                    SAPPORO_CITY,
+                    { ...SAPPORO_CITY, type: 'Hotel', id: '705159' },
+                    otherCity,
+                    { ...SAPPORO_CITY, type: 'BusinessArea', id: '999' },
+                    SAPPORO_CITY,
+                ] },
+            }))
+            .mockResolvedValueOnce(ok({
+                Result: true, ErrorCode: 0, Response: { searchResults: [] },
+            })));
+        const ambiguousPage = createPageMock([]);
+        const emptyPage = createPageMock([]);
+        const args = {
+            query: '札幌', checkin: '2026-10-15', checkout: '2026-10-18', limit: 5,
+        };
+
+        const ambiguous = await cmd.func(ambiguousPage, args);
+        const none = await cmd.func(emptyPage, { ...args, query: 'not-a-place' });
+
+        expect(ambiguous).toEqual({
+            outcome: 'ambiguous_destination',
+            resolved_destination: null,
+            observed_scope: null,
+            items: [],
+            candidates: [
+                expect.objectContaining({ city_id: 641, name: '札幌' }),
+                expect.objectContaining({ city_id: 642, name: '札幌郡' }),
+            ],
+        });
+        expect(none).toEqual({
+            outcome: 'no_destination',
+            resolved_destination: null,
+            observed_scope: null,
+            items: [],
+            candidates: [],
+        });
+        expect(ambiguousPage.goto).not.toHaveBeenCalled();
+        expect(emptyPage.goto).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when the observed listing scope differs from the request', async () => {
+        vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(ok({
+            Result: true, ErrorCode: 0, Response: { searchResults: [SAPPORO_CITY] },
+        }))));
+        const page = createPageMock([
+            'content',
+            {
+                scope_valid: true,
+                observed_scope: {
+                    city_id: 2,
+                    city_name: '上海',
+                    destination_input_value: '上海',
+                    city_type: 'City',
+                    checkin: '2026-10-15',
+                    checkout: '2026-10-18',
+                    nights: 3,
+                },
+                items: [{ hotel_id: '1', name: 'Wrong-scope hotel' }],
+            },
+        ]);
+
+        await expect(cmd.func(page, {
+            query: '札幌', checkin: '2026-10-15', checkout: '2026-10-18', limit: 5,
+        })).rejects.toMatchObject({
+            code: 'COMMAND_EXEC', message: expect.stringContaining('did not match'),
+        });
+    });
+
+    it('projects, deduplicates, and truthfully labels hotels inside the browser context', () => {
+        const dom = new JSDOM('<!doctype html><html><body></body></html>', {
+            url: 'https://hotels.ctrip.com/hotels/list?city=641',
+            runScripts: 'outside-only',
+        });
+        const hotel = (hotelId, name, advertiseInfo) => ({
+            adTraceid: 'must-not-cross',
+            hotelInfo: {
+                summary: { hotelId },
+                nameInfo: { name },
+                positionInfo: { cityName: '札幌', positionDesc: '札幌市中心' },
+                commentInfo: { commentScore: '4.6', commenterNumber: '1,200条点评' },
+                advertiseInfo,
+            },
+            roomInfo: [{ priceInfo: { price: 997, currency: 'CNY' } }],
+        });
+        dom.window.__NEXT_DATA__ = { props: { pageProps: {
+            searchBarData: {
+                destinationInfo: {
+                    cityId: 641, cityName: '札幌', destinationInputValue: '札幌', cityType: 'City',
+                },
+                calendarInfo: { checkIn: '2026-10-15', checkOut: '2026-10-18', nights: 3 },
+            },
+            initListRequest: {
+                destination: { geo: { cityId: 641 } },
+                date: { dateInfo: { checkInDate: '20261015', checkOutDate: '20261018' } },
+            },
+            initListData: { hotelList: [
+                hotel('705159', 'Promoted', { isAdHotel: true, isAdSolt: false }),
+                hotel('705159', 'Duplicate', { isAdHotel: false, isAdSolt: false }),
+                hotel('705160', 'Organic', { isAdHotel: false, isAdSolt: false }),
+                hotel('705161', 'Unknown promotion', { isAdHotel: false }),
+                hotel('not-numeric', 'Invalid identity', { isAdHotel: false, isAdSolt: false }),
+            ] },
+        } } };
+
+        const extract = () => dom.window.Function(
+            `return (${hotelSearchTest.buildDiscoveryExtractJs(5)})`,
+        )();
+        const extracted = extract();
+
+        expect(extracted.scope_valid).toBe(true);
+        expect(extracted.items.map((item) => item.hotel_id)).toEqual(['705159', '705160', '705161']);
+        expect(extracted.items.map((item) => item.promoted)).toEqual([true, false, null]);
+        expect(Object.keys(extracted.items[0]).sort()).toEqual([
+            'city', 'district', 'hotel_id', 'name', 'position', 'promoted',
+            'rating', 'review_count', 'url',
+        ]);
+        expect(JSON.stringify(extracted)).not.toMatch(/adTraceid|price|currency|roomInfo/);
+
+        dom.window.__NEXT_DATA__.props.pageProps.initListRequest.date.dateInfo.checkInDate = '20261016';
+        expect(extract().scope_valid).toBe(false);
+        dom.window.__NEXT_DATA__.props.pageProps.initListRequest.date.dateInfo.checkInDate = '2026-10-15';
+        expect(extract().scope_valid).toBe(false);
+    });
+
+    it('returns a verified discovery envelope when the scoped first page has no hotels', async () => {
+        vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(ok({
+            Result: true, ErrorCode: 0, Response: { searchResults: [SAPPORO_CITY] },
+        }))));
+        const observedScope = {
+            city_id: 641,
+            city_name: '札幌',
+            destination_input_value: '札幌',
+            city_type: 'IntlCity',
+            checkin: '2026-10-15',
+            checkout: '2026-10-18',
+            nights: 3,
+        };
+        const page = createPageMock([
+            'content',
+            { scope_valid: true, observed_scope: observedScope, items: [] },
+        ]);
+
+        const result = await cmd.func(page, {
+            query: '札幌', checkin: '2026-10-15', checkout: '2026-10-18', limit: 5,
+        });
+
+        expect(result).toEqual({
+            outcome: 'results',
+            resolved_destination: expect.objectContaining({ city_id: 641, name: '札幌' }),
+            observed_scope: observedScope,
+            items: [],
+            candidates: [],
+        });
     });
 
     it('rejects invalid city / date / limit before browser navigation', async () => {
