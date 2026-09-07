@@ -37,7 +37,7 @@ test('backend images build from the current checkout without a second OpenCLI so
   assert.match(dockerfile, /COPY services\/opencli-backend\/src \/app\/src/);
   assert.match(dockerfile, /COPY services\/opencli-backend\/scripts\/smoke-deployment\.mjs \/app\/scripts\/smoke-deployment\.mjs/);
   assert.match(compose, /context: \.\.\/\.\./);
-  assert.match(compose, /image: local\/opencli-backend:2\.0\.3\.2/);
+  assert.match(compose, /image: local\/opencli-backend:2\.0\.4\.1/);
   assert.match(compose, /image: local\/opencli-chromium:2\.0\.0\.1/);
   assert.doesNotMatch(compose, /OPENCLI_(?:REPOSITORY|COMMIT)/);
 });
@@ -75,8 +75,8 @@ test('backend image verification and fork release both gate on the provider-neut
   ]);
 
   for (const workflow of [backendWorkflow, releaseWorkflow]) {
-    assert.match(workflow, /--target backend --tag local\/opencli-backend:2\.0\.3\.2/);
+    assert.match(workflow, /--target backend --tag local\/opencli-backend:2\.0\.4\.1/);
     assert.match(workflow, /--target chromium --tag local\/opencli-chromium:2\.0\.0\.1/);
-    assert.match(workflow, /services\/opencli-backend\/scripts\/smoke-compose\.sh 2\.0\.3 2\.0\.0/);
+    assert.match(workflow, /services\/opencli-backend\/scripts\/smoke-compose\.sh 2\.0\.4 2\.0\.0/);
   }
 });

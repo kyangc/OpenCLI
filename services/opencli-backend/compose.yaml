@@ -43,7 +43,7 @@ services:
     restart: unless-stopped
 
   backend:
-    image: local/opencli-backend:2.0.3.2
+    image: local/opencli-backend:2.0.4.1
     build:
       <<: *opencli-build
       target: backend
