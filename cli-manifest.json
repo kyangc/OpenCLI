@@ -9263,6 +9263,47 @@
   },
   {
     "site": "ctrip",
+    "name": "hotel-discover",
+    "description": "按目的地名称解析城市并返回经页面范围验证的携程酒店候选",
+    "access": "read",
+    "domain": "hotels.ctrip.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "query",
+        "type": "str",
+        "required": true,
+        "help": "Destination query resolved to one Ctrip city inside this command"
+      },
+      {
+        "name": "checkin",
+        "type": "str",
+        "required": true,
+        "help": "Check-in date (YYYY-MM-DD)"
+      },
+      {
+        "name": "checkout",
+        "type": "str",
+        "required": true,
+        "help": "Check-out date (YYYY-MM-DD)"
+      },
+      {
+        "name": "limit",
+        "type": "str",
+        "default": 10,
+        "required": false,
+        "help": "Number of hotels (1-30); SSR first page returns ~13 entries"
+      }
+    ],
+    "defaultFormat": "json",
+    "type": "js",
+    "modulePath": "ctrip/hotel-discover.js",
+    "sourceFile": "ctrip/hotel-discover.js",
+    "navigateBefore": false
+  },
+  {
+    "site": "ctrip",
     "name": "hotel-search",
     "description": "搜索携程酒店列表（按城市 + 入住/离店日期）",
     "access": "read",
