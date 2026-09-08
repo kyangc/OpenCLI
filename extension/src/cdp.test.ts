@@ -488,7 +488,7 @@ describe('cdp network capture correctness', () => {
         _target: chrome.debugger.Debuggee,
         method: string,
         params?: Record<string, unknown>,
-      ) => {
+      ): Promise<unknown> => {
         if (method === 'Runtime.evaluate' && params?.expression === '1') return { result: { value: '1' } };
         if (method === 'Network.getRequestPostData') return {}; // no override; use inline postData
         return {};
@@ -510,6 +510,7 @@ describe('cdp network capture correctness', () => {
     };
     return {
       chrome: { tabs, debugger: debuggerApi, scripting: {}, runtime: { id: 'opencli-test' } },
+      debuggerApi,
       fire,
     };
   }
@@ -533,6 +534,7 @@ describe('cdp network capture correctness', () => {
       redirectResponse: { status: 302, url: 'https://api.example/login' },
       request: { url: 'https://api.example/home', method: 'GET' },
     });
+    await mock.fire('Network.loadingFinished', { requestId: 'r1' });
 
     const entries = await mod.readNetworkCapture(1);
     expect(entries).toHaveLength(1);
@@ -540,8 +542,17 @@ describe('cdp network capture correctness', () => {
     expect(entries[0].requestBodyKind).toBe('string');
   });
 
-  it('does not create an orphan entry from a response after the request was drained', async () => {
+  it('keeps an in-flight request across an early read and returns it exactly once after completion', async () => {
     const mock = createNetworkMock();
+    mock.debuggerApi.sendCommand.mockImplementation(async (
+      _target: chrome.debugger.Debuggee,
+      method: string,
+      params?: Record<string, unknown>,
+    ) => {
+      if (method === 'Runtime.evaluate' && params?.expression === '1') return { result: { value: '1' } };
+      if (method === 'Network.getResponseBody') return { body: '{"ok":true}', base64Encoded: false };
+      return {};
+    });
     vi.stubGlobal('chrome', mock.chrome);
     const mod = await import('./cdp');
     mod.registerListeners();
@@ -551,17 +562,224 @@ describe('cdp network capture correctness', () => {
       requestId: 'r2',
       request: { url: 'https://api.example/x', method: 'GET' },
     });
-    // Read drains entries + clears requestToIndex while the request is in flight.
     const first = await mod.readNetworkCapture(1);
-    expect(first).toHaveLength(1);
+    expect(first).toEqual([]);
 
-    // Late response for the drained request must not resurrect a half-entry.
     await mock.fire('Network.responseReceived', {
       requestId: 'r2',
       response: { url: 'https://api.example/x', status: 200, mimeType: 'text/html' },
     });
+    await mock.fire('Network.loadingFinished', { requestId: 'r2' });
     const second = await mod.readNetworkCapture(1);
-    expect(second).toEqual([]);
+    expect(second).toEqual([
+      expect.objectContaining({
+        url: 'https://api.example/x',
+        method: 'GET',
+        responseStatus: 200,
+        responseContentType: 'text/html',
+        responsePreview: '{"ok":true}',
+      }),
+    ]);
+    await expect(mod.readNetworkCapture(1)).resolves.toEqual([]);
+  });
+
+  it('keeps request identity stable when a later request completes first', async () => {
+    const mock = createNetworkMock();
+    mock.debuggerApi.sendCommand.mockImplementation(async (
+      _target: chrome.debugger.Debuggee,
+      method: string,
+      params?: Record<string, unknown>,
+    ) => {
+      if (method === 'Runtime.evaluate' && params?.expression === '1') return { result: { value: '1' } };
+      if (method === 'Network.getResponseBody') return { body: `body-${params?.requestId}`, base64Encoded: false };
+      return {};
+    });
+    vi.stubGlobal('chrome', mock.chrome);
+    const mod = await import('./cdp');
+    mod.registerListeners();
+    await mod.startNetworkCapture(1, 'api.example');
+
+    await mock.fire('Network.requestWillBeSent', {
+      requestId: 'a',
+      request: { url: 'https://api.example/a', method: 'GET' },
+    });
+    await expect(mod.readNetworkCapture(1)).resolves.toEqual([]);
+    await mock.fire('Network.requestWillBeSent', {
+      requestId: 'b',
+      request: { url: 'https://api.example/b', method: 'POST' },
+    });
+
+    await mock.fire('Network.responseReceived', {
+      requestId: 'b',
+      response: { status: 201, mimeType: 'application/json' },
+    });
+    await mock.fire('Network.loadingFinished', { requestId: 'b' });
+    await expect(mod.readNetworkCapture(1)).resolves.toEqual([
+      expect.objectContaining({
+        url: 'https://api.example/b',
+        method: 'POST',
+        responseStatus: 201,
+        responsePreview: 'body-b',
+      }),
+    ]);
+
+    await mock.fire('Network.responseReceived', {
+      requestId: 'a',
+      response: { status: 200, mimeType: 'text/plain' },
+    });
+    await mock.fire('Network.loadingFinished', { requestId: 'a' });
+    await expect(mod.readNetworkCapture(1)).resolves.toEqual([
+      expect.objectContaining({
+        url: 'https://api.example/a',
+        method: 'GET',
+        responseStatus: 200,
+        responsePreview: 'body-a',
+      }),
+    ]);
+    await expect(mod.readNetworkCapture(1)).resolves.toEqual([]);
+  });
+
+  it('does not drain or block on a pending body fetch while newer requests complete', async () => {
+    const mock = createNetworkMock();
+    let resolveBodyA!: (value: { body: string; base64Encoded: boolean }) => void;
+    const bodyA = new Promise<{ body: string; base64Encoded: boolean }>((resolve) => {
+      resolveBodyA = resolve;
+    });
+    mock.debuggerApi.sendCommand.mockImplementation(async (
+      _target: chrome.debugger.Debuggee,
+      method: string,
+      params?: Record<string, unknown>,
+    ) => {
+      if (method === 'Runtime.evaluate' && params?.expression === '1') return { result: { value: '1' } };
+      if (method === 'Network.getResponseBody' && params?.requestId === 'a') return bodyA;
+      if (method === 'Network.getResponseBody') return { body: 'body-b', base64Encoded: false };
+      return {};
+    });
+    vi.stubGlobal('chrome', mock.chrome);
+    const mod = await import('./cdp');
+    mod.registerListeners();
+    await mod.startNetworkCapture(1, 'api.example');
+
+    await mock.fire('Network.requestWillBeSent', {
+      requestId: 'a',
+      request: { url: 'https://api.example/a', method: 'GET' },
+    });
+    const finishA = mock.fire('Network.loadingFinished', { requestId: 'a' });
+
+    await expect(mod.readNetworkCapture(1)).resolves.toEqual([]);
+
+    await mock.fire('Network.requestWillBeSent', {
+      requestId: 'b',
+      request: { url: 'https://api.example/b', method: 'GET' },
+    });
+    await mock.fire('Network.loadingFinished', { requestId: 'b' });
+    await expect(mod.readNetworkCapture(1)).resolves.toEqual([
+      expect.objectContaining({ url: 'https://api.example/b', responsePreview: 'body-b' }),
+    ]);
+
+    resolveBodyA({ body: 'body-a', base64Encoded: false });
+    await finishA;
+    await expect(mod.readNetworkCapture(1)).resolves.toEqual([
+      expect.objectContaining({ url: 'https://api.example/a', responsePreview: 'body-a' }),
+    ]);
+    await expect(mod.readNetworkCapture(1)).resolves.toEqual([]);
+  });
+
+  it('finalizes failed loads and failed body fetches with explicit missing-body metadata', async () => {
+    const mock = createNetworkMock();
+    mock.debuggerApi.sendCommand.mockImplementation(async (
+      _target: chrome.debugger.Debuggee,
+      method: string,
+      params?: Record<string, unknown>,
+    ) => {
+      if (method === 'Runtime.evaluate' && params?.expression === '1') return { result: { value: '1' } };
+      if (method === 'Network.getResponseBody' && params?.requestId === 'body-failed') {
+        throw new Error('No resource with given identifier found');
+      }
+      return {};
+    });
+    vi.stubGlobal('chrome', mock.chrome);
+    const mod = await import('./cdp');
+    mod.registerListeners();
+    await mod.startNetworkCapture(1, 'api.example');
+
+    await mock.fire('Network.requestWillBeSent', {
+      requestId: 'load-failed',
+      request: { url: 'https://api.example/load-failed', method: 'GET' },
+    });
+    await mock.fire('Network.loadingFailed', {
+      requestId: 'load-failed',
+      errorText: 'net::ERR_ABORTED',
+    });
+    await mock.fire('Network.requestWillBeSent', {
+      requestId: 'body-failed',
+      request: { url: 'https://api.example/body-failed', method: 'GET' },
+    });
+    await mock.fire('Network.responseReceived', {
+      requestId: 'body-failed',
+      response: { status: 204, mimeType: 'application/json' },
+    });
+    await mock.fire('Network.loadingFinished', { requestId: 'body-failed' });
+
+    await expect(mod.readNetworkCapture(1)).resolves.toEqual([
+      expect.objectContaining({
+        url: 'https://api.example/load-failed',
+        responseBodyMissing: true,
+        responseBodyError: 'net::ERR_ABORTED',
+      }),
+      expect.objectContaining({
+        url: 'https://api.example/body-failed',
+        responseStatus: 204,
+        responseBodyMissing: true,
+        responseBodyError: 'No resource with given identifier found',
+      }),
+    ]);
+    await expect(mod.readNetworkCapture(1)).resolves.toEqual([]);
+  });
+
+  it('starts a fresh capture window and ignores late events from the previous window', async () => {
+    const mock = createNetworkMock();
+    let resolveStaleBody!: (value: { body: string; base64Encoded: boolean }) => void;
+    const staleBody = new Promise<{ body: string; base64Encoded: boolean }>((resolve) => {
+      resolveStaleBody = resolve;
+    });
+    mock.debuggerApi.sendCommand.mockImplementation(async (
+      _target: chrome.debugger.Debuggee,
+      method: string,
+      params?: Record<string, unknown>,
+    ) => {
+      if (method === 'Runtime.evaluate' && params?.expression === '1') return { result: { value: '1' } };
+      if (method === 'Network.getResponseBody' && params?.requestId === 'stale') return staleBody;
+      if (method === 'Network.getResponseBody') return { body: `body-${params?.requestId}`, base64Encoded: false };
+      return {};
+    });
+    vi.stubGlobal('chrome', mock.chrome);
+    const mod = await import('./cdp');
+    mod.registerListeners();
+    await mod.startNetworkCapture(1, 'api.example');
+    await mock.fire('Network.requestWillBeSent', {
+      requestId: 'stale',
+      request: { url: 'https://api.example/stale', method: 'GET' },
+    });
+    const finishStale = mock.fire('Network.loadingFinished', { requestId: 'stale' });
+
+    await mod.startNetworkCapture(1, 'api.example');
+    await expect(mod.readNetworkCapture(1)).resolves.toEqual([]);
+    await mock.fire('Network.requestWillBeSent', {
+      requestId: 'fresh',
+      request: { url: 'https://api.example/fresh', method: 'GET' },
+    });
+    await mock.fire('Network.responseReceived', {
+      requestId: 'fresh',
+      response: { status: 200, mimeType: 'application/json' },
+    });
+    await mock.fire('Network.loadingFinished', { requestId: 'fresh' });
+    resolveStaleBody({ body: 'stale-body', base64Encoded: false });
+    await finishStale;
+
+    await expect(mod.readNetworkCapture(1)).resolves.toEqual([
+      expect.objectContaining({ url: 'https://api.example/fresh', responseStatus: 200 }),
+    ]);
   });
 });
 

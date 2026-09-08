@@ -40,6 +40,14 @@ vi.mock('ws', () => ({
 
 import { CDPBridge, CDP_REQUEST_BODY_CAPTURE_LIMIT } from './cdp.js';
 
+function emitCdpEvent(method: string, params: Record<string, unknown>): void {
+  MockWebSocket.lastInstance?.emit('message', Buffer.from(JSON.stringify({ method, params })));
+}
+
+async function flushAsyncCaptureWork(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 describe('CDPBridge cookies', () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
@@ -111,18 +119,17 @@ describe('CDPBridge cookies', () => {
 
     const page = await bridge.connect();
     await page.startNetworkCapture?.();
-    MockWebSocket.lastInstance?.emit('message', Buffer.from(JSON.stringify({
-      method: 'Network.requestWillBeSent',
-      params: {
-        requestId: 'request-1',
-        request: {
-          method: 'POST',
-          url: 'https://example.test/rsc-action/actions/pagination',
-          headers: { Authorization: 'Bearer secret', 'Content-Type': 'application/json' },
-          hasPostData: true,
-        },
+    emitCdpEvent('Network.requestWillBeSent', {
+      requestId: 'request-1',
+      request: {
+        method: 'POST',
+        url: 'https://example.test/rsc-action/actions/pagination',
+        headers: { Authorization: 'Bearer secret', 'Content-Type': 'application/json' },
+        hasPostData: true,
       },
-    })));
+    });
+    emitCdpEvent('Network.loadingFinished', { requestId: 'request-1' });
+    await flushAsyncCaptureWork();
 
     const entries = await page.readNetworkCapture?.() as Array<Record<string, unknown>>;
     expect(entries).toHaveLength(1);
@@ -134,5 +141,279 @@ describe('CDPBridge cookies', () => {
       requestBodyTruncated: true,
     });
     expect(String(entries[0].requestBodyPreview)).toHaveLength(CDP_REQUEST_BODY_CAPTURE_LIMIT);
+  });
+
+  it('keeps an in-flight request across an early read and returns it exactly once after completion', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+
+    const bridge = new CDPBridge();
+    vi.spyOn(bridge, 'send').mockImplementation(async (method: string) => {
+      if (method === 'Network.getResponseBody') return { body: '{"ok":true}', base64Encoded: false };
+      return {};
+    });
+
+    const page = await bridge.connect();
+    await page.startNetworkCapture?.();
+    emitCdpEvent('Network.requestWillBeSent', {
+      requestId: 'request-early-read',
+      request: { method: 'GET', url: 'https://example.test/api/data' },
+    });
+
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([]);
+
+    emitCdpEvent('Network.responseReceived', {
+      requestId: 'request-early-read',
+      response: { status: 200, mimeType: 'application/json' },
+    });
+    emitCdpEvent('Network.loadingFinished', { requestId: 'request-early-read' });
+    await flushAsyncCaptureWork();
+
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([
+      expect.objectContaining({
+        url: 'https://example.test/api/data',
+        method: 'GET',
+        responseStatus: 200,
+        responseContentType: 'application/json',
+        responsePreview: '{"ok":true}',
+      }),
+    ]);
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([]);
+  });
+
+  it('keeps request identity stable when a later request completes first', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+
+    const bridge = new CDPBridge();
+    vi.spyOn(bridge, 'send').mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'Network.getResponseBody') return { body: `body-${params?.requestId}`, base64Encoded: false };
+      return {};
+    });
+
+    const page = await bridge.connect();
+    await page.startNetworkCapture?.();
+    emitCdpEvent('Network.requestWillBeSent', {
+      requestId: 'request-a',
+      request: { method: 'GET', url: 'https://example.test/api/a' },
+    });
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([]);
+    emitCdpEvent('Network.requestWillBeSent', {
+      requestId: 'request-b',
+      request: { method: 'POST', url: 'https://example.test/api/b' },
+    });
+
+    emitCdpEvent('Network.responseReceived', {
+      requestId: 'request-b',
+      response: { status: 201, mimeType: 'application/json' },
+    });
+    emitCdpEvent('Network.loadingFinished', { requestId: 'request-b' });
+    await flushAsyncCaptureWork();
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([
+      expect.objectContaining({
+        url: 'https://example.test/api/b',
+        method: 'POST',
+        responseStatus: 201,
+        responsePreview: 'body-request-b',
+      }),
+    ]);
+
+    emitCdpEvent('Network.responseReceived', {
+      requestId: 'request-a',
+      response: { status: 200, mimeType: 'text/plain' },
+    });
+    emitCdpEvent('Network.loadingFinished', { requestId: 'request-a' });
+    await flushAsyncCaptureWork();
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([
+      expect.objectContaining({
+        url: 'https://example.test/api/a',
+        method: 'GET',
+        responseStatus: 200,
+        responsePreview: 'body-request-a',
+      }),
+    ]);
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([]);
+  });
+
+  it('does not drain or block on a pending body fetch while newer requests complete', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+
+    let resolveBodyA!: (value: { body: string; base64Encoded: boolean }) => void;
+    const bodyA = new Promise<{ body: string; base64Encoded: boolean }>((resolve) => {
+      resolveBodyA = resolve;
+    });
+    const bridge = new CDPBridge();
+    vi.spyOn(bridge, 'send').mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'Network.getResponseBody' && params?.requestId === 'request-a') return bodyA;
+      if (method === 'Network.getResponseBody') return { body: 'body-b', base64Encoded: false };
+      return {};
+    });
+
+    const page = await bridge.connect();
+    await page.startNetworkCapture?.();
+    emitCdpEvent('Network.requestWillBeSent', {
+      requestId: 'request-a',
+      request: { method: 'GET', url: 'https://example.test/api/a' },
+    });
+    emitCdpEvent('Network.loadingFinished', { requestId: 'request-a' });
+
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([]);
+
+    emitCdpEvent('Network.requestWillBeSent', {
+      requestId: 'request-b',
+      request: { method: 'GET', url: 'https://example.test/api/b' },
+    });
+    emitCdpEvent('Network.loadingFinished', { requestId: 'request-b' });
+    await flushAsyncCaptureWork();
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([
+      expect.objectContaining({ url: 'https://example.test/api/b', responsePreview: 'body-b' }),
+    ]);
+
+    resolveBodyA({ body: 'body-a', base64Encoded: false });
+    await flushAsyncCaptureWork();
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([
+      expect.objectContaining({ url: 'https://example.test/api/a', responsePreview: 'body-a' }),
+    ]);
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([]);
+  });
+
+  it('finalizes failed loads and failed body fetches with explicit missing-body metadata', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+
+    const bridge = new CDPBridge();
+    vi.spyOn(bridge, 'send').mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'Network.getResponseBody' && params?.requestId === 'body-failed') {
+        throw new Error('No resource with given identifier found');
+      }
+      return {};
+    });
+
+    const page = await bridge.connect();
+    await page.startNetworkCapture?.();
+    emitCdpEvent('Network.requestWillBeSent', {
+      requestId: 'load-failed',
+      request: { method: 'GET', url: 'https://example.test/api/load-failed' },
+    });
+    emitCdpEvent('Network.loadingFailed', {
+      requestId: 'load-failed',
+      errorText: 'net::ERR_ABORTED',
+    });
+    emitCdpEvent('Network.requestWillBeSent', {
+      requestId: 'body-failed',
+      request: { method: 'GET', url: 'https://example.test/api/body-failed' },
+    });
+    emitCdpEvent('Network.responseReceived', {
+      requestId: 'body-failed',
+      response: { status: 204, mimeType: 'application/json' },
+    });
+    emitCdpEvent('Network.loadingFinished', { requestId: 'body-failed' });
+    await flushAsyncCaptureWork();
+
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([
+      expect.objectContaining({
+        url: 'https://example.test/api/load-failed',
+        responseBodyMissing: true,
+        responseBodyError: 'net::ERR_ABORTED',
+      }),
+      expect.objectContaining({
+        url: 'https://example.test/api/body-failed',
+        responseStatus: 204,
+        responseBodyMissing: true,
+        responseBodyError: 'No resource with given identifier found',
+      }),
+    ]);
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([]);
+  });
+
+  it('starts a fresh capture window without reinstalling listeners', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+
+    let resolveStaleBody!: (value: { body: string; base64Encoded: boolean }) => void;
+    const staleBody = new Promise<{ body: string; base64Encoded: boolean }>((resolve) => {
+      resolveStaleBody = resolve;
+    });
+    const bridge = new CDPBridge();
+    const send = vi.spyOn(bridge, 'send').mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'Network.getResponseBody' && params?.requestId === 'stale') return staleBody;
+      if (method === 'Network.getResponseBody') return { body: `body-${params?.requestId}`, base64Encoded: false };
+      return {};
+    });
+
+    const page = await bridge.connect();
+    await page.startNetworkCapture?.();
+    emitCdpEvent('Network.requestWillBeSent', {
+      requestId: 'stale',
+      request: { method: 'GET', url: 'https://example.test/api/stale' },
+    });
+    emitCdpEvent('Network.loadingFinished', { requestId: 'stale' });
+
+    await page.startNetworkCapture?.();
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([]);
+    emitCdpEvent('Network.requestWillBeSent', {
+      requestId: 'fresh',
+      request: { method: 'GET', url: 'https://example.test/api/fresh' },
+    });
+    emitCdpEvent('Network.responseReceived', {
+      requestId: 'fresh',
+      response: { status: 200, mimeType: 'application/json' },
+    });
+    emitCdpEvent('Network.loadingFinished', { requestId: 'fresh' });
+    await flushAsyncCaptureWork();
+    resolveStaleBody({ body: 'stale-body', base64Encoded: false });
+    await flushAsyncCaptureWork();
+
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([
+      expect.objectContaining({ url: 'https://example.test/api/fresh', responseStatus: 200 }),
+    ]);
+    expect(send.mock.calls.filter(([method]) => method === 'Network.enable')).toHaveLength(1);
+  });
+
+  it('reuses a request record across redirects and preserves the initial POST body', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+
+    const bridge = new CDPBridge();
+    vi.spyOn(bridge, 'send').mockImplementation(async (method: string) => {
+      if (method === 'Network.getResponseBody') return { body: '{"redirected":true}', base64Encoded: false };
+      return {};
+    });
+
+    const page = await bridge.connect();
+    await page.startNetworkCapture?.();
+    emitCdpEvent('Network.requestWillBeSent', {
+      requestId: 'redirected-request',
+      request: {
+        method: 'POST',
+        url: 'https://example.test/login',
+        postData: 'user=a&pass=b',
+        hasPostData: true,
+      },
+    });
+    emitCdpEvent('Network.requestWillBeSent', {
+      requestId: 'redirected-request',
+      redirectResponse: { status: 302, url: 'https://example.test/login' },
+      request: {
+        method: 'GET',
+        url: 'https://example.test/home',
+      },
+    });
+
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([]);
+
+    emitCdpEvent('Network.responseReceived', {
+      requestId: 'redirected-request',
+      response: { status: 200, mimeType: 'application/json' },
+    });
+    emitCdpEvent('Network.loadingFinished', { requestId: 'redirected-request' });
+    await flushAsyncCaptureWork();
+
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([
+      expect.objectContaining({
+        url: 'https://example.test/login',
+        method: 'POST',
+        requestBodyKind: 'string',
+        requestBodyPreview: 'user=a&pass=b',
+        responseStatus: 200,
+        responsePreview: '{"redirected":true}',
+      }),
+    ]);
+    await expect(page.readNetworkCapture?.()).resolves.toEqual([]);
   });
 });

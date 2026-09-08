@@ -34,13 +34,21 @@ type NetworkCaptureEntry = {
   responsePreview?: string;
   responseBodyFullSize?: number;
   responseBodyTruncated?: boolean;
+  responseBodyMissing?: boolean;
+  responseBodyError?: string;
   timestamp: number;
+};
+
+type NetworkCaptureRecord = {
+  entry: NetworkCaptureEntry;
+  networkTerminal: boolean;
+  pendingBodyFetches: number;
 };
 
 type NetworkCaptureState = {
   patterns: string[];
-  entries: NetworkCaptureEntry[];
-  requestToIndex: Map<string, number>;
+  entries: NetworkCaptureRecord[];
+  requestToEntry: Map<string, NetworkCaptureRecord>;
 };
 
 export type DownloadWaitResult = {
@@ -744,25 +752,27 @@ function getOrCreateNetworkCaptureEntry(tabId: number, requestId: string, fallba
   url?: string;
   method?: string;
   requestHeaders?: Record<string, string>;
-}): NetworkCaptureEntry | null {
+}): NetworkCaptureRecord | null {
   const state = networkCaptures.get(tabId);
   if (!state) return null;
-  const existingIndex = state.requestToIndex.get(requestId);
-  if (existingIndex !== undefined) {
-    return state.entries[existingIndex] || null;
-  }
+  const existing = state.requestToEntry.get(requestId);
+  if (existing) return existing;
   const url = fallback?.url || '';
   if (!shouldCaptureUrl(url, state.patterns)) return null;
-  const entry: NetworkCaptureEntry = {
-    kind: 'cdp',
-    url,
-    method: fallback?.method || 'GET',
-    requestHeaders: fallback?.requestHeaders || {},
-    timestamp: Date.now(),
+  const record: NetworkCaptureRecord = {
+    entry: {
+      kind: 'cdp',
+      url,
+      method: fallback?.method || 'GET',
+      requestHeaders: fallback?.requestHeaders || {},
+      timestamp: Date.now(),
+    },
+    networkTerminal: false,
+    pendingBodyFetches: 0,
   };
-  state.entries.push(entry);
-  state.requestToIndex.set(requestId, state.entries.length - 1);
-  return entry;
+  state.entries.push(record);
+  state.requestToEntry.set(requestId, record);
+  return record;
 }
 
 export async function startNetworkCapture(
@@ -774,17 +784,24 @@ export async function startNetworkCapture(
   networkCaptures.set(tabId, {
     patterns: normalizeCapturePatterns(pattern),
     entries: [],
-    requestToIndex: new Map(),
+    requestToEntry: new Map(),
   });
 }
 
 export async function readNetworkCapture(tabId: number): Promise<NetworkCaptureEntry[]> {
   const state = networkCaptures.get(tabId);
   if (!state) return [];
-  const entries = state.entries.slice();
-  state.entries = [];
-  state.requestToIndex.clear();
-  return entries;
+  const completed: NetworkCaptureEntry[] = [];
+  const pending: NetworkCaptureRecord[] = [];
+  for (const record of state.entries) {
+    if (record.networkTerminal && record.pendingBodyFetches === 0) {
+      completed.push(record.entry);
+    } else {
+      pending.push(record);
+    }
+  }
+  state.entries = pending;
+  return completed;
 }
 
 export function hasActiveNetworkCapture(tabId: number): boolean {
@@ -848,12 +865,13 @@ export function registerListeners(): void {
         postData?: string;
         hasPostData?: boolean;
       } | undefined;
-      const entry = getOrCreateNetworkCaptureEntry(tabId, requestId, {
+      const record = getOrCreateNetworkCaptureEntry(tabId, requestId, {
         url: request?.url,
         method: request?.method,
         requestHeaders: normalizeHeaders(request?.headers),
       });
-      if (!entry) return;
+      if (!record) return;
+      const entry = record.entry;
       // On an HTTP 30x, CDP re-fires requestWillBeSent with the SAME requestId
       // (the prior hop is carried in `redirectResponse`) for the redirect
       // target — typically a GET with no postData. Overwriting the body here
@@ -869,6 +887,7 @@ export function registerListeners(): void {
           entry.requestBodyFullSize = fullSize;
           entry.requestBodyTruncated = truncated;
         }
+        record.pendingBodyFetches += 1;
         try {
           const postData = await sendDebuggerCommand({ tabId }, 'Network.getRequestPostData', { requestId }) as { postData?: string };
           if (postData?.postData) {
@@ -882,6 +901,8 @@ export function registerListeners(): void {
           }
         } catch {
           // Optional; some requests do not expose postData.
+        } finally {
+          record.pendingBodyFetches -= 1;
         }
       }
       return;
@@ -895,15 +916,12 @@ export function registerListeners(): void {
         status?: number;
         headers?: Record<string, unknown>;
       } | undefined;
-      // Lookup-only (like loadingFinished below): never create an entry from a
-      // response. If the matching requestWillBeSent was already drained by a
-      // readNetworkCapture() while the request was in flight, creating one here
-      // produces an orphan half-entry with a defaulted method ('GET') and no
-      // request data.
-      const stateEntryIndex = state.requestToIndex.get(requestId);
-      if (stateEntryIndex === undefined) return;
-      const entry = state.entries[stateEntryIndex];
-      if (!entry) return;
+      // Lookup-only (like loadingFinished below): response events enrich the
+      // stable request record retained across reads and never create orphan
+      // half-entries without request data.
+      const record = state.requestToEntry.get(requestId);
+      if (!record) return;
+      const entry = record.entry;
       entry.responseStatus = response?.status;
       entry.responseContentType = response?.mimeType || '';
       entry.responseHeaders = normalizeHeaders(response?.headers);
@@ -912,10 +930,11 @@ export function registerListeners(): void {
 
     if (method === 'Network.loadingFinished') {
       const requestId = String(eventParams?.requestId || '');
-      const stateEntryIndex = state.requestToIndex.get(requestId);
-      if (stateEntryIndex === undefined) return;
-      const entry = state.entries[stateEntryIndex];
-      if (!entry) return;
+      const record = state.requestToEntry.get(requestId);
+      if (!record || record.networkTerminal) return;
+      const entry = record.entry;
+      record.networkTerminal = true;
+      record.pendingBodyFetches += 1;
       try {
         const body = await sendDebuggerCommand({ tabId }, 'Network.getResponseBody', { requestId }) as {
           body?: string;
@@ -928,9 +947,32 @@ export function registerListeners(): void {
           entry.responsePreview = body.base64Encoded ? `base64:${stored}` : stored;
           entry.responseBodyFullSize = fullSize;
           entry.responseBodyTruncated = truncated;
+        } else {
+          entry.responseBodyMissing = true;
+          entry.responseBodyError = 'Response body unavailable';
         }
-      } catch {
+      } catch (error) {
+        entry.responseBodyMissing = true;
+        entry.responseBodyError = error instanceof Error ? error.message : String(error);
         // Optional; bodies are unavailable for some requests (e.g. uploads).
+      } finally {
+        record.pendingBodyFetches -= 1;
+        if (state.requestToEntry.get(requestId) === record) {
+          state.requestToEntry.delete(requestId);
+        }
+      }
+      return;
+    }
+
+    if (method === 'Network.loadingFailed') {
+      const requestId = String(eventParams?.requestId || '');
+      const record = state.requestToEntry.get(requestId);
+      if (!record || record.networkTerminal) return;
+      record.entry.responseBodyMissing = true;
+      record.entry.responseBodyError = String(eventParams?.errorText || 'Network loading failed');
+      record.networkTerminal = true;
+      if (state.requestToEntry.get(requestId) === record) {
+        state.requestToEntry.delete(requestId);
       }
     }
   });
