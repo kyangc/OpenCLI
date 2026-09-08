@@ -9161,6 +9161,49 @@
   },
   {
     "site": "ctrip",
+    "name": "flight-discover",
+    "description": "返回携程单程页重置到顶部后的首屏可见航班候选（不向下滚动加载更多，不含报价）",
+    "access": "read",
+    "domain": "flights.ctrip.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "from",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Departure IATA code (e.g. BJS / PEK)"
+      },
+      {
+        "name": "to",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Arrival IATA code (e.g. SHA / PVG)"
+      },
+      {
+        "name": "date",
+        "type": "str",
+        "required": true,
+        "help": "Departure date (YYYY-MM-DD)"
+      },
+      {
+        "name": "limit",
+        "type": "str",
+        "default": 5,
+        "required": false,
+        "help": "Number of visible candidates (1-5)"
+      }
+    ],
+    "defaultFormat": "json",
+    "type": "js",
+    "modulePath": "ctrip/flight-discover.js",
+    "sourceFile": "ctrip/flight-discover.js",
+    "navigateBefore": false
+  },
+  {
+    "site": "ctrip",
     "name": "flight-round",
     "description": "搜索携程往返机票（按出发/到达 IATA 三字码 + 去/返日期，返回去程腿含往返总价）",
     "access": "read",

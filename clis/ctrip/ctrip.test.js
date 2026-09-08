@@ -6,6 +6,7 @@ import './hotel-suggest.js';
 import './hotel-search.js';
 import './hotel-discover.js';
 import './flight.js';
+import './flight-discover.js';
 import './flight-round.js';
 import './train.js';
 import './hotel.js';
@@ -16,6 +17,7 @@ import './tour.js';
 import './package.js';
 import './attraction.js';
 import { __test__ as flightTest } from './flight.js';
+import { __test__ as flightDiscoverTest } from './flight-discover.js';
 import { __test__ as hotelSearchTest } from './hotel-search.js';
 import { __test__ as hotelDiscoverTest } from './hotel-discover.js';
 import {
@@ -1165,6 +1167,253 @@ describe('ctrip flight command (registry-level)', () => {
             from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 2,
         });
         expect(rows.map((row) => row.flightNo)).toEqual(['MF8561', 'MU1 / MU2']);
+    });
+});
+
+describe('ctrip flight-discover command (registry-level)', () => {
+    const cmd = getRegistry().get('ctrip/flight-discover');
+
+    it('registers an independent bounded JSON discovery command', () => {
+        expect(cmd).toMatchObject({
+            access: 'read',
+            browser: true,
+            navigateBefore: false,
+            domain: 'flights.ctrip.com',
+            defaultFormat: 'json',
+        });
+        expect(cmd.columns).toBeUndefined();
+        expect(cmd.args.map((arg) => arg.name)).toEqual(['from', 'to', 'date', 'limit']);
+    });
+
+    it('returns a scope-verified first-screen envelope without quote or ranking fields', async () => {
+        const observedScope = {
+            origin: 'PEK',
+            destination: 'SHA',
+            departure_date: '2026-06-15',
+            trip_type: 'one_way',
+            adults: 1,
+            children: 0,
+            infants: 0,
+            cabin_filter_label: '全舱位',
+            time_basis: 'page_displayed_local_time',
+        };
+        const rawObservedScope = { ...observedScope, cabin_filter_label: `全舱位\uE60C\uE604` };
+        const page = createPageMock([
+            true,
+            'content',
+            {
+                scope_valid: true,
+                observed_scope: rawObservedScope,
+                page_reported_counts: { total_results: 32 },
+                sort_label: '推荐排序',
+                items: [{
+                    airline: `厦门航空\uE60C`,
+                    flight_number: `MF8561\uE604`,
+                    departure_datetime: '2026-06-15 07:50',
+                    departure_airport: `北京大兴国际机场\uE60C`,
+                    arrival_datetime: '2026-06-15 09:45',
+                    arrival_airport: `上海浦东国际机场\uE604`,
+                    overnight: false,
+                    connection_type: 'direct',
+                    duration: `1时55分\uE60C`,
+                    price: 487,
+                    currency: 'CNY',
+                    rank: 1,
+                }],
+            },
+        ]);
+
+        const result = await cmd.func(page, {
+            from: 'pek', to: 'sha', date: '2026-06-15', limit: 5,
+        });
+
+        expect(result).toEqual({
+            outcome: 'results',
+            requested_scope: {
+                origin: 'PEK', destination: 'SHA', departure_date: '2026-06-15',
+            },
+            observed_scope: observedScope,
+            coverage: 'observed_initial_results',
+            page_reported_counts: { total_results: 32 },
+            sort_label: '推荐排序',
+            items: [{
+                airline: '厦门航空',
+                flight_number: 'MF8561',
+                departure_datetime: '2026-06-15 07:50',
+                departure_airport: '北京大兴国际机场',
+                arrival_datetime: '2026-06-15 09:45',
+                arrival_airport: '上海浦东国际机场',
+                overnight: false,
+                connection_type: 'direct',
+                duration: '1时55分',
+            }],
+        });
+        expect(JSON.stringify(result)).not.toMatch(/price|currency|rank|lowest|all_results|[\uE000-\uF8FF]/i);
+        expect(page.goto).toHaveBeenCalledTimes(1);
+        expect(page.evaluate).toHaveBeenCalledTimes(3);
+        expect(page.evaluate.mock.calls[0][0]).toBe(flightDiscoverTest.RESET_TO_TOP_JS);
+        expect(page.evaluate.mock.calls[1][0]).toBe(flightDiscoverTest.WAIT_FOR_DISCOVERY_JS);
+        expect(page.evaluate.mock.calls.filter(([script]) => script === flightDiscoverTest.RESET_TO_TOP_JS)).toHaveLength(1);
+        expect(page.goto.mock.invocationCallOrder[0]).toBeLessThan(page.evaluate.mock.invocationCallOrder[0]);
+        expect(page.evaluate.mock.invocationCallOrder[0]).toBeLessThan(page.evaluate.mock.invocationCallOrder[1]);
+        expect(page.scroll).not.toHaveBeenCalled();
+        expect(page.autoScroll).not.toHaveBeenCalled();
+    });
+
+    it('rejects invalid input before navigation and fails closed on captcha, blank, or scope drift', async () => {
+        const invalidPage = createPageMock([]);
+        await expect(cmd.func(invalidPage, { from: 'PEK', to: 'PEK', date: '2026-06-15', limit: 5 }))
+            .rejects.toMatchObject({ code: 'ARGUMENT' });
+        await expect(cmd.func(invalidPage, { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 6 }))
+            .rejects.toMatchObject({ code: 'ARGUMENT' });
+        expect(invalidPage.goto).not.toHaveBeenCalled();
+
+        await expect(cmd.func(createPageMock([true, 'captcha']), {
+            from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5,
+        })).rejects.toMatchObject({ code: 'AUTH_REQUIRED' });
+        await expect(cmd.func(createPageMock([true, 'content', { captcha: true }]), {
+            from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5,
+        })).rejects.toMatchObject({ code: 'AUTH_REQUIRED' });
+        await expect(cmd.func(createPageMock([true, 'timeout']), {
+            from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5,
+        })).rejects.toMatchObject({ code: 'COMMAND_EXEC', message: 'Ctrip flight-discover page evidence was missing or inconsistent' });
+        await expect(cmd.func(createPageMock([true, 'content', {
+            scope_valid: false,
+            observed_scope: { origin: 'CAN' },
+            items: [{ airline: '不应返回' }],
+        }]), {
+            from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5,
+        })).rejects.toMatchObject({ code: 'COMMAND_EXEC', message: 'Ctrip flight-discover page evidence was missing or inconsistent' });
+    });
+
+    it('rejects malformed times and non-airport tokens returned by the page extractor', async () => {
+        const page = createPageMock([true, 'content', {
+            scope_valid: true,
+            observed_scope: {
+                origin: 'PEK', destination: 'SHA', departure_date: '2026-06-15',
+                trip_type: 'one_way', adults: 1, children: 0, infants: 0,
+                cabin_filter_label: '经济舱', time_basis: 'page_displayed_local_time',
+            },
+            page_reported_counts: null,
+            sort_label: null,
+            items: [{
+                airline: '虚假航空', flight_number: 'ZZ999',
+                departure_datetime: '2026-06-15 29:90', departure_airport: '¥',
+                arrival_datetime: '2026-06-15 99:99', arrival_airport: '订票',
+                overnight: false, connection_type: null, duration: '1小时',
+            }],
+        }]);
+        await expect(cmd.func(page, { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5 }))
+            .rejects.toMatchObject({ code: 'COMMAND_EXEC', message: 'Ctrip flight-discover page evidence was missing or inconsistent' });
+    });
+});
+
+describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
+    function runExtract(
+        requestedScope = { origin: 'PVG', destination: 'CTS', departure_date: '2026-10-02' },
+        beforeCards = '',
+    ) {
+        const cards = Array.from({ length: 6 }, (_, index) => index === 1
+            ? `<div class="flight-item" data-top="${100 + index * 90}">
+                长荣航空 BR751 BR116 20:05 浦东国际机场 T2 需中国台湾过境签 转1次 转 中国台北 12h10m
+                <span>15:00</span><span>+1</span><span>天</span><span>新千岁机场</span> 国际航站楼 22小时 航班详情 ¥ 4999 起
+              </div>`
+            : `<div class="flight-item" data-top="${100 + index * 90}">
+                <span style="display:none"><span>隐藏航空 ZZ999</span></span>
+                东方航空 MU27${index} 空客321(中) 08:0${index} 浦东国际机场 T1
+                12:3${index} 新千岁机场 国际航站楼 3小时30分 航班详情 ¥ ${5191 + index} 起
+              </div>`).join('');
+        const dom = new JSDOM(`<!doctype html><html><body>
+          <form id="searchForm">
+            <ul><li class="active">单程</li><li>往返</li></ul>
+            <input name="owDCity" value="上海(浦东国际机场)(PVG)">
+            <input name="owACity" value="札幌(新千岁机场)(CTS)">
+            <div id="datePicker"><input aria-label="请选择日期" value="2026-10-02"><input aria-label="请选择日期" value=""></div>
+            <div class="flt-subclass"><div class="form-select-v3"><span>经济/超经舱\uE60C\uE604</span></div></div>
+            <span>1成人</span><span>0儿童</span><span>0婴儿</span>
+          </form>
+          <div class="result-header"><span class="hint">所有起飞 / 到达时间均为当地时间</span></div>
+          <div class="recommend-box header"><span class="total">共94个航班，2个直飞</span></div>
+          <div class="sortbar-v2"><span class="sort-item active">直飞优先</span></div>
+          ${beforeCards}
+          ${cards}
+          <div class="flight-item" data-top="900">屏幕外航空 XX999 09:00 屏幕外机场 10:00 屏幕外机场 1小时</div>
+        </body></html>`, { url: 'https://flights.ctrip.com/online/list/oneway-pvg-cts' });
+        Object.defineProperty(dom.window, 'innerHeight', { value: 720 });
+        Object.defineProperty(dom.window, 'innerWidth', { value: 800 });
+        dom.window.HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
+            const top = Number(this.dataset.top || 10);
+            const left = Number(this.dataset.left || 0);
+            return { x: left, y: top, top, bottom: top + 60, left, right: left + 600, width: 600, height: 60, toJSON() {} };
+        };
+        const js = flightDiscoverTest.buildFlightDiscoveryExtractJs(requestedScope, 5);
+        return Function('document', 'getComputedStyle', 'innerHeight', 'innerWidth', `return (${js})`)(
+            dom.window.document,
+            dom.window.getComputedStyle.bind(dom.window),
+            dom.window.innerHeight,
+            dom.window.innerWidth,
+        );
+    }
+
+    it('extracts at most five in-viewport cards and only page-observed non-price facts', () => {
+        const result = runExtract();
+        expect(result).toMatchObject({
+            scope_valid: true,
+            observed_scope: {
+                origin: 'PVG', destination: 'CTS', departure_date: '2026-10-02',
+                trip_type: 'one_way', adults: 1, children: 0, infants: 0,
+                cabin_filter_label: '经济/超经舱', time_basis: 'page_displayed_local_time',
+            },
+            page_reported_counts: { total_results: 94, direct_results: 2 },
+            sort_label: '直飞优先',
+        });
+        expect(result.items).toHaveLength(5);
+        expect(result.items[0]).toMatchObject({
+            airline: '东方航空', flight_number: 'MU270',
+            departure_datetime: '2026-10-02 08:00', departure_airport: '浦东国际机场',
+            arrival_datetime: '2026-10-02 12:30', arrival_airport: '新千岁机场',
+            overnight: false, connection_type: null, duration: '3小时30分',
+        });
+        expect(result.items[1]).toMatchObject({
+            airline: '长荣航空', flight_number: 'BR751 / BR116',
+            arrival_datetime: '2026-10-03 15:00', overnight: true,
+            connection_type: 'connecting', duration: '22小时',
+        });
+        expect(JSON.stringify(result.items)).not.toMatch(/4999|5191|price|currency|rank/i);
+        expect(result.items.some((item) => item.airline === '屏幕外航空')).toBe(false);
+    });
+
+    it('marks the extraction invalid when the visible search scope drifts', () => {
+        expect(runExtract({ origin: 'PEK', destination: 'CTS', departure_date: '2026-10-02' }).scope_valid).toBe(false);
+    });
+
+    it('skips cards with invalid clock values or no credible airport anchors', () => {
+        const malformed = `
+          <div class="flight-item" data-top="40">虚假时间航空 ZZ999 29:90 浦东国际机场 99:99 新千岁机场 1小时</div>
+          <div class="flight-item" data-top="50">虚假机场航空 YY999 09:00 ¥ 10:00 订票 1小时</div>`;
+        const result = runExtract(undefined, malformed);
+        expect(result.items).toHaveLength(5);
+        expect(result.items.map((item) => item.airline)).not.toContain('虚假时间航空');
+        expect(result.items.map((item) => item.airline)).not.toContain('虚假机场航空');
+    });
+
+    it('does not treat a card under an invisible ancestor as visible', () => {
+        const hidden = `<div style="opacity:0">
+          <div class="flight-item" data-top="40">隐藏父级航空 HH999 09:00 浦东国际机场 10:00 新千岁机场 1小时</div>
+        </div>`;
+        const result = runExtract(undefined, hidden);
+        expect(result.items).toHaveLength(5);
+        expect(result.items.map((item) => item.airline)).not.toContain('隐藏父级航空');
+    });
+
+    it('does not treat horizontally offscreen cards as visible', () => {
+        const offscreen = `
+          <div class="flight-item" data-top="40" data-left="-700">左侧屏外航空 LL999 09:00 浦东国际机场 10:00 新千岁机场 1小时</div>
+          <div class="flight-item" data-top="50" data-left="900">右侧屏外航空 RR999 09:00 浦东国际机场 10:00 新千岁机场 1小时</div>`;
+        const result = runExtract(undefined, offscreen);
+        expect(result.items).toHaveLength(5);
+        expect(result.items.map((item) => item.airline)).not.toContain('左侧屏外航空');
+        expect(result.items.map((item) => item.airline)).not.toContain('右侧屏外航空');
     });
 });
 
