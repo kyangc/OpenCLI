@@ -2,12 +2,14 @@
  * Bounded one-way flight discovery from the first screen after one top reset.
  * It never scrolls downward to load more results.
  */
-import { ArgumentError, AuthRequiredError, CommandExecutionError } from '@jackwener/opencli/errors';
+import { ArgumentError, AuthRequiredError, CommandExecutionError, TimeoutError } from '@jackwener/opencli/errors';
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { parseIataCode, parseIsoDate, parseStrictIntegerRange } from './utils.js';
 
 const MAX_DISCOVERY_ITEMS = 5;
-const DISCOVERY_ERROR = 'Ctrip flight-discover page evidence was missing or inconsistent';
+const DISCOVERY_WAIT_SECONDS = 20;
+const DISCOVERY_SCOPE_ERROR = 'Ctrip flight-discover visible search scope was missing or did not match the request';
+const DISCOVERY_OUTPUT_ERROR = 'Ctrip flight-discover visible flight-card extraction returned invalid output';
 const RESET_TO_TOP_JS = '(() => { window.scrollTo(0, 0); return true; })()';
 const WAIT_FOR_DISCOVERY_JS = `
   new Promise((resolve) => {
@@ -34,12 +36,14 @@ const WAIT_FOR_DISCOVERY_JS = `
     };
     const found = detect();
     if (found) return resolve(found);
-    const observer = new MutationObserver(() => {
+    const deadline = Date.now() + ${DISCOVERY_WAIT_SECONDS * 1000};
+    const poll = () => {
+      if (Date.now() >= deadline) return resolve('timeout');
       const result = detect();
-      if (result) { observer.disconnect(); resolve(result); }
-    });
-    observer.observe(document.documentElement, { childList: true, subtree: true });
-    setTimeout(() => { observer.disconnect(); resolve('timeout'); }, 12000);
+      if (result) return resolve(result);
+      setTimeout(poll, Math.min(250, deadline - Date.now()));
+    };
+    setTimeout(poll, 250);
   })
 `;
 
@@ -226,14 +230,14 @@ function normalizeDiscoveryItem(item) {
     const arrivalAirport = cleanString(item?.arrival_airport);
     if (!airline || !isValidObservedDatetime(departureDatetime) || !isCredibleAirport(departureAirport) ||
         !isValidObservedDatetime(arrivalDatetime) || !isCredibleAirport(arrivalAirport)) {
-        throw new CommandExecutionError(DISCOVERY_ERROR);
+        throw new CommandExecutionError(DISCOVERY_OUTPUT_ERROR);
     }
     const connectionType = item?.connection_type;
     if (![null, 'direct', 'connecting'].includes(connectionType)) {
-        throw new CommandExecutionError(DISCOVERY_ERROR);
+        throw new CommandExecutionError(DISCOVERY_OUTPUT_ERROR);
     }
     if (![null, true, false].includes(item?.overnight)) {
-        throw new CommandExecutionError(DISCOVERY_ERROR);
+        throw new CommandExecutionError(DISCOVERY_OUTPUT_ERROR);
     }
     return {
         airline,
@@ -286,30 +290,42 @@ cli({
         if (readiness === 'captcha') {
             throw new AuthRequiredError('flights.ctrip.com', 'Ctrip is asking for a captcha; complete it in your browser session and retry');
         }
+        if (readiness === 'timeout') {
+            throw new TimeoutError(
+                'Ctrip visible first-screen flight wait',
+                DISCOVERY_WAIT_SECONDS,
+                'The fixed page-side discovery wait expired before a visible first-screen flight card appeared; check the Ctrip browser session and retry.',
+            );
+        }
         if (readiness !== 'content') {
-            throw new CommandExecutionError(DISCOVERY_ERROR);
+            throw new CommandExecutionError(DISCOVERY_OUTPUT_ERROR);
         }
         const raw = await page.evaluate(buildFlightDiscoveryExtractJs(requestedScope, limit));
         if (raw?.captcha === true) {
             throw new AuthRequiredError('flights.ctrip.com', 'Ctrip is asking for a captcha; complete it in your browser session and retry');
         }
-        if (!raw || typeof raw !== 'object' || raw.scope_valid !== true ||
-            !raw.observed_scope || !Array.isArray(raw.items) || raw.items.length === 0) {
-            throw new CommandExecutionError(DISCOVERY_ERROR);
+        if (!raw || typeof raw !== 'object') {
+            throw new CommandExecutionError(DISCOVERY_OUTPUT_ERROR);
+        }
+        if (raw.scope_valid !== true || !raw.observed_scope) {
+            throw new CommandExecutionError(DISCOVERY_SCOPE_ERROR);
+        }
+        if (!Array.isArray(raw.items) || raw.items.length === 0) {
+            throw new CommandExecutionError(DISCOVERY_OUTPUT_ERROR);
         }
         const scope = raw.observed_scope;
         if (scope.origin !== origin || scope.destination !== destination ||
             scope.departure_date !== departureDate || scope.trip_type !== 'one_way' ||
             scope.adults !== 1 || scope.children !== 0 || scope.infants !== 0 ||
             !cleanString(scope.cabin_filter_label) || scope.time_basis !== 'page_displayed_local_time') {
-            throw new CommandExecutionError(DISCOVERY_ERROR);
+            throw new CommandExecutionError(DISCOVERY_SCOPE_ERROR);
         }
         const pageReportedCounts = raw.page_reported_counts;
         if (pageReportedCounts !== null && (typeof pageReportedCounts !== 'object' ||
             !Number.isSafeInteger(pageReportedCounts.total_results) || pageReportedCounts.total_results < 0 ||
             (pageReportedCounts.direct_results !== undefined &&
                 (!Number.isSafeInteger(pageReportedCounts.direct_results) || pageReportedCounts.direct_results < 0)))) {
-            throw new CommandExecutionError(DISCOVERY_ERROR);
+            throw new CommandExecutionError(DISCOVERY_OUTPUT_ERROR);
         }
         const sortLabel = cleanString(raw.sort_label);
         const normalizedCounts = pageReportedCounts === null ? null : {
