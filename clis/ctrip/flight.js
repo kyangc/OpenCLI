@@ -17,22 +17,14 @@ const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 20;
 const CAPTURE_PATTERN = '/international/search/api/search/batchSearch';
 const CAPTURE_TIMEOUT_SECONDS = 12;
-const WAIT_FOR_BATCH_CAPTURE_JS = `
-  new Promise((resolve) => {
-    const detect = () => {
-      if (location.pathname.includes('captcha') || /验证码|verify the human|安全验证/i.test(document.body?.innerText || '')) return 'captcha';
-      if (document.querySelector('.flight-item')) return 'content';
-      return null;
-    };
-    const found = detect();
-    if (found) return resolve(found);
-    const observer = new MutationObserver(() => {
-      const result = detect();
-      if (result) { observer.disconnect(); resolve(result); }
-    });
-    observer.observe(document.documentElement, { childList: true, subtree: true });
-    setTimeout(() => { observer.disconnect(); resolve('timeout'); }, ${CAPTURE_TIMEOUT_SECONDS * 1000});
-  })
+const CAPTURE_TIMEOUT_MS = CAPTURE_TIMEOUT_SECONDS * 1000;
+const NO_CAPTURE_TIMEOUT_MESSAGE = 'No completed batchSearch response was captured within 12s after navigation.';
+const PARTIAL_CAPTURE_TIMEOUT_MESSAGE = 'Ctrip returned partial flight batches but did not report search completion within 12s after navigation; partial results were not returned.';
+const NO_CAPTURE_TIMEOUT_HINT = 'Retry the search or try again later.';
+const PARTIAL_CAPTURE_TIMEOUT_HINT = 'Partial results were not returned. Retry the search or try again later.';
+const UNSAFE_CAPTURE_MESSAGE = 'Ctrip flight batchSearch response could not be safely processed.';
+const CHECK_CAPTCHA_JS = `
+  (() => location.pathname.includes('captcha') || /验证码|verify the human|安全验证/i.test(document.body?.innerText || '') ? 'captcha' : null)()
 `;
 
 function parseFlightLimit(raw) {
@@ -56,59 +48,66 @@ function cabinLabel(value) {
 
 function parseBatchSearchCaptures(entries) {
     if (!Array.isArray(entries)) {
-        throw new CommandExecutionError('Ctrip flight network capture returned malformed entries');
+        throw new CommandExecutionError(UNSAFE_CAPTURE_MESSAGE);
     }
     const captured = entries.filter((entry) => String(entry?.url || '').includes(CAPTURE_PATTERN));
     if (captured.length === 0) return null;
 
-    const byId = new Map();
+    const parsedItineraries = [];
     let finished = false;
     for (const entry of captured) {
         const status = Number(entry?.responseStatus || 0);
         if (status === 401 || status === 403) {
-            throw new AuthRequiredError('flights.ctrip.com', `Ctrip flight API returned HTTP ${status}; complete any verification in the browser and retry`);
+            throw new AuthRequiredError('flights.ctrip.com', 'Ctrip flight API requires authentication or verification.');
         }
         if (status !== 200) {
-            throw new CommandExecutionError(`Ctrip flight API returned HTTP ${status || 'unknown'}`);
+            throw new CommandExecutionError(UNSAFE_CAPTURE_MESSAGE);
         }
-        if (entry?.responseBodyTruncated === true) {
-            throw new CommandExecutionError('Ctrip flight API response exceeded the browser capture limit');
-        }
-        if (typeof entry?.responsePreview !== 'string') {
-            throw new CommandExecutionError('Ctrip flight API response body was unavailable');
+        if (entry?.responseBodyMissing === true || entry?.responseBodyTruncated === true ||
+            typeof entry?.responsePreview !== 'string') {
+            throw new CommandExecutionError(UNSAFE_CAPTURE_MESSAGE);
         }
         let payload;
         try {
             payload = JSON.parse(entry.responsePreview);
         }
         catch {
-            throw new CommandExecutionError('Ctrip flight API returned invalid JSON');
+            throw new CommandExecutionError(UNSAFE_CAPTURE_MESSAGE);
         }
         if (payload?.status !== 0) {
-            throw new CommandExecutionError(`Ctrip flight API failed (status=${String(payload?.status)}): ${cleanString(payload?.msg) || 'unknown error'}`);
+            throw new CommandExecutionError(UNSAFE_CAPTURE_MESSAGE);
         }
         const itineraries = payload?.data?.flightItineraryList;
         if (!Array.isArray(itineraries) || typeof payload?.data?.context?.finished !== 'boolean') {
-            throw new CommandExecutionError('Ctrip flight API returned a malformed batchSearch payload');
+            throw new CommandExecutionError(UNSAFE_CAPTURE_MESSAGE);
         }
         for (const itinerary of itineraries) {
             const id = cleanString(itinerary?.itineraryId);
-            if (!id) throw new CommandExecutionError('Ctrip flight API returned an itinerary without an id');
-            byId.set(id, itinerary);
+            if (!id) throw new CommandExecutionError(UNSAFE_CAPTURE_MESSAGE);
+            // Keep only parsed itineraries; raw capture entries and bodies are
+            // released after each drain.
+            parsedItineraries.push(itinerary);
         }
-        finished = payload.data.context.finished;
+        finished ||= payload.data.context.finished;
     }
-    if (!finished) {
-        throw new CommandExecutionError('Ctrip flight batchSearch ended before the upstream search reported completion');
-    }
-    return [...byId.values()];
+    return { itineraries: parsedItineraries, finished };
 }
 
-function mapItinerary(itinerary, searchUrl, index) {
+function captureTimeout(hasPartialBatch) {
+    const error = new TimeoutError(
+        'Ctrip flight batchSearch capture',
+        CAPTURE_TIMEOUT_SECONDS,
+        hasPartialBatch ? PARTIAL_CAPTURE_TIMEOUT_HINT : NO_CAPTURE_TIMEOUT_HINT,
+    );
+    error.message = hasPartialBatch ? PARTIAL_CAPTURE_TIMEOUT_MESSAGE : NO_CAPTURE_TIMEOUT_MESSAGE;
+    return error;
+}
+
+function mapItinerary(itinerary, searchUrl) {
     const segments = itinerary?.flightSegments;
     const prices = itinerary?.priceList;
     if (!Array.isArray(segments) || segments.length === 0 || !Array.isArray(prices) || prices.length === 0) {
-        throw new CommandExecutionError(`Ctrip flight API returned malformed itinerary at index ${index}`);
+        throw new CommandExecutionError(UNSAFE_CAPTURE_MESSAGE);
     }
     const legs = segments.flatMap((segment) => Array.isArray(segment?.flightList) ? segment.flightList : []);
     const first = legs[0];
@@ -122,7 +121,7 @@ function mapItinerary(itinerary, searchUrl, index) {
     const arrivalAirport = cleanString(last?.arrivalAirportName);
     const price = Number(prices[0]?.sortPrice ?? prices[0]?.adultPrice);
     if (!airline || !flightNo || !departureTime || !arrivalTime || !departureAirport || !arrivalAirport || !Number.isFinite(price)) {
-        throw new CommandExecutionError(`Ctrip flight API returned malformed itinerary at index ${index}`);
+        throw new CommandExecutionError(UNSAFE_CAPTURE_MESSAGE);
     }
     const row = {
         airline,
@@ -184,22 +183,45 @@ cli({
         }
         await page.readNetworkCapture();
         await page.goto(searchUrl);
-        // The initial document can finish before the large batchSearch body.
-        // The first rendered card is only a readiness signal; row data still
-        // comes exclusively from the structured response below.
-        const readiness = await page.evaluate(WAIT_FOR_BATCH_CAPTURE_JS);
-        if (readiness === 'captcha') {
+        const captureDeadline = performance.now() + CAPTURE_TIMEOUT_MS;
+        if (await page.evaluate(CHECK_CAPTCHA_JS) === 'captcha') {
             throw new AuthRequiredError('flights.ctrip.com', 'Ctrip is asking for a captcha; complete it in your browser session and retry');
         }
-        const itineraries = parseBatchSearchCaptures(await page.readNetworkCapture());
-        if (!itineraries) {
-            throw new TimeoutError('Ctrip flight API capture', CAPTURE_TIMEOUT_SECONDS, 'No batchSearch response was observed after opening the results page.');
+
+        const itinerariesById = new Map();
+        let sawPartialBatch = false;
+        let itineraries;
+        while (true) {
+            if (performance.now() >= captureDeadline) {
+                throw captureTimeout(sawPartialBatch);
+            }
+            const entries = await page.readNetworkCapture();
+            if (performance.now() >= captureDeadline) {
+                throw captureTimeout(sawPartialBatch);
+            }
+            const batch = parseBatchSearchCaptures(entries);
+            if (batch) {
+                for (const itinerary of batch.itineraries) {
+                    itinerariesById.set(cleanString(itinerary.itineraryId), itinerary);
+                }
+                if (batch.finished) {
+                    itineraries = [...itinerariesById.values()];
+                    break;
+                }
+                sawPartialBatch = true;
+            }
+
+            const remainingMs = captureDeadline - performance.now();
+            if (remainingMs <= 0) {
+                throw captureTimeout(sawPartialBatch);
+            }
+            await page.sleep(Math.min(0.5, remainingMs / 1000));
         }
         if (itineraries.length === 0) {
             throw new EmptyResultError('ctrip flight', `No flights for ${fromCode}→${toCode} on ${date}`);
         }
         const rows = itineraries
-            .map((itinerary, index) => mapItinerary(itinerary, searchUrl, index))
+            .map((itinerary) => mapItinerary(itinerary, searchUrl))
             // The page groups direct flights before transfers, then applies its
             // displayed starting price and departure-time order inside each group.
             .sort(([rowA, connectingA, departureA, idA], [rowB, connectingB, departureB, idB]) =>

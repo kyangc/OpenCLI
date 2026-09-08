@@ -48,6 +48,30 @@ const CDP_SEND_TIMEOUT = 30_000;
 export const CDP_RESPONSE_BODY_CAPTURE_LIMIT = 8 * 1024 * 1024;
 export const CDP_REQUEST_BODY_CAPTURE_LIMIT = 1 * 1024 * 1024;
 
+type NetworkCaptureEntry = {
+  url: string;
+  method: string;
+  responseStatus?: number;
+  requestHeaders?: Record<string, string>;
+  requestBodyKind?: string;
+  requestBodyPreview?: string;
+  requestBodyFullSize?: number;
+  requestBodyTruncated?: boolean;
+  responseContentType?: string;
+  responsePreview?: string;
+  responseBodyFullSize?: number;
+  responseBodyTruncated?: boolean;
+  responseBodyMissing?: boolean;
+  responseBodyError?: string;
+  timestamp: number;
+};
+
+type NetworkCaptureRecord = {
+  entry: NetworkCaptureEntry;
+  networkTerminal: boolean;
+  pendingBodyFetches: number;
+};
+
 export class CDPBridge implements IBrowserFactory {
   private _ws: WebSocket | null = null;
   private _idCounter = 0;
@@ -190,21 +214,8 @@ class CDPPage extends CDPBasePage {
   // Network capture state (mirrors extension/src/cdp.ts NetworkCaptureEntry shape)
   private _networkCapturing = false;
   private _networkCapturePattern = '';
-  private _networkEntries: Array<{
-    url: string; method: string; responseStatus?: number;
-    requestHeaders?: Record<string, string>;
-    requestBodyKind?: string;
-    requestBodyPreview?: string;
-    requestBodyFullSize?: number;
-    requestBodyTruncated?: boolean;
-    responseContentType?: string;
-    responsePreview?: string;
-    responseBodyFullSize?: number;
-    responseBodyTruncated?: boolean;
-    timestamp: number;
-  }> = [];
-  private _pendingRequests = new Map<string, number>(); // requestId → index in _networkEntries
-  private _pendingBodyFetches: Set<Promise<void>> = new Set(); // track in-flight getResponseBody calls
+  private _networkEntries: NetworkCaptureRecord[] = [];
+  private _pendingRequests = new Map<string, NetworkCaptureRecord>();
   private _consoleMessages: Array<{ type: string; text: string; timestamp: number }> = [];
   private _consoleCapturing = false;
 
@@ -307,14 +318,13 @@ class CDPPage extends CDPBasePage {
   }
 
   async startNetworkCapture(pattern: string = ''): Promise<boolean> {
-    // Always update the filter pattern
+    // A start begins a fresh capture window, including when listeners are
+    // already installed from an earlier window.
     this._networkCapturePattern = pattern;
+    this._networkEntries = [];
+    this._pendingRequests.clear();
 
-    // Reset state only on first start; avoid wiping entries if already capturing
     if (!this._networkCapturing) {
-      this._networkEntries = [];
-      this._pendingRequests.clear();
-      this._pendingBodyFetches.clear();
       await this.bridge.send('Network.enable');
 
       // Step 1: Record request method/url on requestWillBeSent
@@ -331,38 +341,47 @@ class CDPPage extends CDPBasePage {
           timestamp: number;
         };
         if (!this._networkCapturePattern || p.request.url.includes(this._networkCapturePattern)) {
+          // Redirect hops reuse the same CDP requestId. Keep the original
+          // request record (including its POST body) and let final response
+          // events complete that stable record.
+          if (this._pendingRequests.has(p.requestId)) return;
           const rawBody = typeof p.request.postData === 'string' ? p.request.postData : '';
           const bodyTruncated = rawBody.length > CDP_REQUEST_BODY_CAPTURE_LIMIT;
-          const idx = this._networkEntries.push({
-            url: p.request.url,
-            method: p.request.method,
-            requestHeaders: Object.fromEntries(
-              Object.entries(p.request.headers ?? {}).map(([name, value]) => [name, String(value)]),
-            ),
-            requestBodyKind: p.request.hasPostData ? 'string' : 'empty',
-            requestBodyPreview: bodyTruncated ? rawBody.slice(0, CDP_REQUEST_BODY_CAPTURE_LIMIT) : rawBody,
-            requestBodyFullSize: rawBody.length,
-            requestBodyTruncated: bodyTruncated,
-            timestamp: Date.now(),
-          }) - 1;
-          this._pendingRequests.set(p.requestId, idx);
+          const record: NetworkCaptureRecord = {
+            entry: {
+              url: p.request.url,
+              method: p.request.method,
+              requestHeaders: Object.fromEntries(
+                Object.entries(p.request.headers ?? {}).map(([name, value]) => [name, String(value)]),
+              ),
+              requestBodyKind: p.request.hasPostData ? 'string' : 'empty',
+              requestBodyPreview: bodyTruncated ? rawBody.slice(0, CDP_REQUEST_BODY_CAPTURE_LIMIT) : rawBody,
+              requestBodyFullSize: rawBody.length,
+              requestBodyTruncated: bodyTruncated,
+              timestamp: Date.now(),
+            },
+            networkTerminal: false,
+            pendingBodyFetches: 0,
+          };
+          this._networkEntries.push(record);
+          this._pendingRequests.set(p.requestId, record);
 
           if (p.request.hasPostData && p.request.postData === undefined) {
-            const requestBodyFetch = this.bridge.send('Network.getRequestPostData', { requestId: p.requestId }).then((result: unknown) => {
+            record.pendingBodyFetches += 1;
+            void this.bridge.send('Network.getRequestPostData', { requestId: p.requestId }).then((result: unknown) => {
               const postData = (result as { postData?: string } | undefined)?.postData;
               if (typeof postData !== 'string') return;
               const truncated = postData.length > CDP_REQUEST_BODY_CAPTURE_LIMIT;
-              this._networkEntries[idx].requestBodyPreview = truncated
+              record.entry.requestBodyPreview = truncated
                 ? postData.slice(0, CDP_REQUEST_BODY_CAPTURE_LIMIT)
                 : postData;
-              this._networkEntries[idx].requestBodyFullSize = postData.length;
-              this._networkEntries[idx].requestBodyTruncated = truncated;
+              record.entry.requestBodyFullSize = postData.length;
+              record.entry.requestBodyTruncated = truncated;
             }).catch(() => {
               // Some request types do not expose post data.
             }).finally(() => {
-              this._pendingBodyFetches.delete(requestBodyFetch);
+              record.pendingBodyFetches -= 1;
             });
-            this._pendingBodyFetches.add(requestBodyFetch);
           }
         }
       });
@@ -370,38 +389,58 @@ class CDPPage extends CDPBasePage {
       // Step 2: Fill in response metadata on responseReceived
       this.bridge.on('Network.responseReceived', (params: unknown) => {
         const p = params as { requestId: string; response: { status: number; mimeType?: string } };
-        const idx = this._pendingRequests.get(p.requestId);
-        if (idx !== undefined) {
-          this._networkEntries[idx].responseStatus = p.response.status;
-          this._networkEntries[idx].responseContentType = p.response.mimeType || '';
+        const record = this._pendingRequests.get(p.requestId);
+        if (record) {
+          record.entry.responseStatus = p.response.status;
+          record.entry.responseContentType = p.response.mimeType || '';
         }
       });
 
       // Step 3: Fetch body on loadingFinished (body is only reliably available after this)
       this.bridge.on('Network.loadingFinished', (params: unknown) => {
         const p = params as { requestId: string };
-        const idx = this._pendingRequests.get(p.requestId);
-        if (idx !== undefined) {
-          const bodyFetch = this.bridge.send('Network.getResponseBody', { requestId: p.requestId }).then((result: unknown) => {
+        const record = this._pendingRequests.get(p.requestId);
+        if (record && !record.networkTerminal) {
+          record.networkTerminal = true;
+          record.pendingBodyFetches += 1;
+          void this.bridge.send('Network.getResponseBody', { requestId: p.requestId }).then((result: unknown) => {
             const r = result as { body?: string; base64Encoded?: boolean } | undefined;
             if (typeof r?.body === 'string') {
               const fullSize = r.body.length;
               const truncated = fullSize > CDP_RESPONSE_BODY_CAPTURE_LIMIT;
               const body = truncated ? r.body.slice(0, CDP_RESPONSE_BODY_CAPTURE_LIMIT) : r.body;
-              this._networkEntries[idx].responsePreview = r.base64Encoded ? `base64:${body}` : body;
-              this._networkEntries[idx].responseBodyFullSize = fullSize;
-              this._networkEntries[idx].responseBodyTruncated = truncated;
+              record.entry.responsePreview = r.base64Encoded ? `base64:${body}` : body;
+              record.entry.responseBodyFullSize = fullSize;
+              record.entry.responseBodyTruncated = truncated;
+            } else {
+              record.entry.responseBodyMissing = true;
+              record.entry.responseBodyError = 'Response body unavailable';
             }
           }).catch((err) => {
+            record.entry.responseBodyMissing = true;
+            record.entry.responseBodyError = err instanceof Error ? err.message : String(err);
             // Body unavailable for some requests (e.g. uploads) — non-fatal
             if (process.env.OPENCLI_VERBOSE) {
               // eslint-disable-next-line no-console
               console.error(`[cdp] getResponseBody failed for ${p.requestId}:`, err instanceof Error ? err.message : err);
             }
           }).finally(() => {
-            this._pendingBodyFetches.delete(bodyFetch);
+            record.pendingBodyFetches -= 1;
+            if (this._pendingRequests.get(p.requestId) === record) {
+              this._pendingRequests.delete(p.requestId);
+            }
           });
-          this._pendingBodyFetches.add(bodyFetch);
+        }
+      });
+
+      this.bridge.on('Network.loadingFailed', (params: unknown) => {
+        const p = params as { requestId: string; errorText?: string };
+        const record = this._pendingRequests.get(p.requestId);
+        if (!record || record.networkTerminal) return;
+        record.entry.responseBodyMissing = true;
+        record.entry.responseBodyError = p.errorText || 'Network loading failed';
+        record.networkTerminal = true;
+        if (this._pendingRequests.get(p.requestId) === record) {
           this._pendingRequests.delete(p.requestId);
         }
       });
@@ -412,13 +451,17 @@ class CDPPage extends CDPBasePage {
   }
 
   async readNetworkCapture(): Promise<unknown[]> {
-    // Await all in-flight body fetches so entries have responsePreview populated
-    if (this._pendingBodyFetches.size > 0) {
-      await Promise.all([...this._pendingBodyFetches]);
+    const completed: NetworkCaptureEntry[] = [];
+    const pending: NetworkCaptureRecord[] = [];
+    for (const record of this._networkEntries) {
+      if (record.networkTerminal && record.pendingBodyFetches === 0) {
+        completed.push(record.entry);
+      } else {
+        pending.push(record);
+      }
     }
-    const entries = [...this._networkEntries];
-    this._networkEntries = [];
-    return entries;
+    this._networkEntries = pending;
+    return completed;
   }
 
   async consoleMessages(level: string = 'all'): Promise<Array<{ type: string; text: string; timestamp: number }>> {

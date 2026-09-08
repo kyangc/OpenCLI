@@ -488,22 +488,24 @@ function normalizeHeaders(headers) {
 function getOrCreateNetworkCaptureEntry(tabId, requestId, fallback) {
   const state = networkCaptures.get(tabId);
   if (!state) return null;
-  const existingIndex = state.requestToIndex.get(requestId);
-  if (existingIndex !== void 0) {
-    return state.entries[existingIndex] || null;
-  }
+  const existing = state.requestToEntry.get(requestId);
+  if (existing) return existing;
   const url = fallback?.url || "";
   if (!shouldCaptureUrl(url, state.patterns)) return null;
-  const entry = {
-    kind: "cdp",
-    url,
-    method: fallback?.method || "GET",
-    requestHeaders: fallback?.requestHeaders || {},
-    timestamp: Date.now()
+  const record = {
+    entry: {
+      kind: "cdp",
+      url,
+      method: fallback?.method || "GET",
+      requestHeaders: fallback?.requestHeaders || {},
+      timestamp: Date.now()
+    },
+    networkTerminal: false,
+    pendingBodyFetches: 0
   };
-  state.entries.push(entry);
-  state.requestToIndex.set(requestId, state.entries.length - 1);
-  return entry;
+  state.entries.push(record);
+  state.requestToEntry.set(requestId, record);
+  return record;
 }
 async function startNetworkCapture(tabId, pattern) {
   await ensureAttached(tabId);
@@ -511,16 +513,23 @@ async function startNetworkCapture(tabId, pattern) {
   networkCaptures.set(tabId, {
     patterns: normalizeCapturePatterns(pattern),
     entries: [],
-    requestToIndex: /* @__PURE__ */ new Map()
+    requestToEntry: /* @__PURE__ */ new Map()
   });
 }
 async function readNetworkCapture(tabId) {
   const state = networkCaptures.get(tabId);
   if (!state) return [];
-  const entries = state.entries.slice();
-  state.entries = [];
-  state.requestToIndex.clear();
-  return entries;
+  const completed = [];
+  const pending = [];
+  for (const record of state.entries) {
+    if (record.networkTerminal && record.pendingBodyFetches === 0) {
+      completed.push(record.entry);
+    } else {
+      pending.push(record);
+    }
+  }
+  state.entries = pending;
+  return completed;
 }
 function hasActiveNetworkCapture(tabId) {
   return networkCaptures.has(tabId);
@@ -576,12 +585,13 @@ function registerListeners() {
     if (method === "Network.requestWillBeSent") {
       const requestId = String(eventParams?.requestId || "");
       const request = eventParams?.request;
-      const entry = getOrCreateNetworkCaptureEntry(tabId, requestId, {
+      const record = getOrCreateNetworkCaptureEntry(tabId, requestId, {
         url: request?.url,
         method: request?.method,
         requestHeaders: normalizeHeaders(request?.headers)
       });
-      if (!entry) return;
+      if (!record) return;
+      const entry = record.entry;
       if (!eventParams?.redirectResponse) {
         entry.requestBodyKind = request?.hasPostData ? "string" : "empty";
         {
@@ -592,6 +602,7 @@ function registerListeners() {
           entry.requestBodyFullSize = fullSize;
           entry.requestBodyTruncated = truncated;
         }
+        record.pendingBodyFetches += 1;
         try {
           const postData = await sendDebuggerCommand({ tabId }, "Network.getRequestPostData", { requestId });
           if (postData?.postData) {
@@ -604,6 +615,8 @@ function registerListeners() {
             entry.requestBodyTruncated = truncated;
           }
         } catch {
+        } finally {
+          record.pendingBodyFetches -= 1;
         }
       }
       return;
@@ -611,10 +624,9 @@ function registerListeners() {
     if (method === "Network.responseReceived") {
       const requestId = String(eventParams?.requestId || "");
       const response = eventParams?.response;
-      const stateEntryIndex = state.requestToIndex.get(requestId);
-      if (stateEntryIndex === void 0) return;
-      const entry = state.entries[stateEntryIndex];
-      if (!entry) return;
+      const record = state.requestToEntry.get(requestId);
+      if (!record) return;
+      const entry = record.entry;
       entry.responseStatus = response?.status;
       entry.responseContentType = response?.mimeType || "";
       entry.responseHeaders = normalizeHeaders(response?.headers);
@@ -622,10 +634,11 @@ function registerListeners() {
     }
     if (method === "Network.loadingFinished") {
       const requestId = String(eventParams?.requestId || "");
-      const stateEntryIndex = state.requestToIndex.get(requestId);
-      if (stateEntryIndex === void 0) return;
-      const entry = state.entries[stateEntryIndex];
-      if (!entry) return;
+      const record = state.requestToEntry.get(requestId);
+      if (!record || record.networkTerminal) return;
+      const entry = record.entry;
+      record.networkTerminal = true;
+      record.pendingBodyFetches += 1;
       try {
         const body = await sendDebuggerCommand({ tabId }, "Network.getResponseBody", { requestId });
         if (typeof body?.body === "string") {
@@ -635,8 +648,30 @@ function registerListeners() {
           entry.responsePreview = body.base64Encoded ? `base64:${stored}` : stored;
           entry.responseBodyFullSize = fullSize;
           entry.responseBodyTruncated = truncated;
+        } else {
+          entry.responseBodyMissing = true;
+          entry.responseBodyError = "Response body unavailable";
         }
-      } catch {
+      } catch (error) {
+        entry.responseBodyMissing = true;
+        entry.responseBodyError = error instanceof Error ? error.message : String(error);
+      } finally {
+        record.pendingBodyFetches -= 1;
+        if (state.requestToEntry.get(requestId) === record) {
+          state.requestToEntry.delete(requestId);
+        }
+      }
+      return;
+    }
+    if (method === "Network.loadingFailed") {
+      const requestId = String(eventParams?.requestId || "");
+      const record = state.requestToEntry.get(requestId);
+      if (!record || record.networkTerminal) return;
+      record.entry.responseBodyMissing = true;
+      record.entry.responseBodyError = String(eventParams?.errorText || "Network loading failed");
+      record.networkTerminal = true;
+      if (state.requestToEntry.get(requestId) === record) {
+        state.requestToEntry.delete(requestId);
       }
     }
   });

@@ -61,6 +61,7 @@ function createPageMock(evaluateResults, networkCaptures = []) {
     return {
         goto: vi.fn().mockResolvedValue(undefined),
         evaluate,
+        sleep: vi.fn().mockResolvedValue(undefined),
         wait: vi.fn().mockResolvedValue(undefined),
         scroll: vi.fn().mockResolvedValue(undefined),
         autoScroll: vi.fn().mockResolvedValue(undefined),
@@ -836,6 +837,19 @@ describe('ctrip flight command (registry-level)', () => {
         };
     }
 
+    function createPollingPage(networkCaptures) {
+        const page = createPageMock([null]);
+        page.readNetworkCapture.mockReset().mockResolvedValueOnce([]);
+        for (const capture of networkCaptures) {
+            page.readNetworkCapture.mockResolvedValueOnce(capture);
+        }
+        page.readNetworkCapture.mockResolvedValue([]);
+        page.sleep.mockImplementation(async (seconds) => {
+            await vi.advanceTimersByTimeAsync(seconds * 1000);
+        });
+        return page;
+    }
+
     it('declares Strategy.INTERCEPT + browser:true + navigateBefore:false + access:read', () => {
         expect(cmd.access).toBe('read');
         expect(cmd.browser).toBe(true);
@@ -863,12 +877,94 @@ describe('ctrip flight command (registry-level)', () => {
         await expect(cmd.func(page, { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5 }))
             .rejects.toThrow('Ctrip is asking for a captcha');
         expect(page.evaluate).toHaveBeenCalledTimes(1);
+        expect(page.evaluate.mock.calls[0][0]).not.toContain('MutationObserver');
+        expect(page.evaluate.mock.calls[0][0]).not.toContain('setTimeout');
+        expect(page.sleep).not.toHaveBeenCalled();
     });
 
-    it('throws TimeoutError when no capture arrives without a captcha', async () => {
-        const page = createPageMock(['timeout']);
-        await expect(cmd.func(page, { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5 }))
-            .rejects.toMatchObject({ code: 'TIMEOUT', message: expect.stringContaining('Ctrip flight API capture') });
+    it('uses one fixed 12s deadline when no completed capture arrives and never oversleeps it', async () => {
+        vi.useFakeTimers();
+        try {
+            const page = createPollingPage([]);
+            await expect(cmd.func(page, { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5 }))
+                .rejects.toMatchObject({
+                    code: 'TIMEOUT',
+                    message: 'No completed batchSearch response was captured within 12s after navigation.',
+                    hint: 'Retry the search or try again later.',
+                });
+            expect(page.startNetworkCapture).toHaveBeenCalledTimes(1);
+            expect(page.goto).toHaveBeenCalledTimes(1);
+            expect(page.sleep).toHaveBeenCalledTimes(24);
+            expect(page.sleep.mock.calls.every(([seconds]) => seconds > 0 && seconds <= 0.5)).toBe(true);
+            expect(page.sleep.mock.calls.reduce((sum, [seconds]) => sum + seconds, 0)).toBe(12);
+        }
+        finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('does not return accumulated partial rows when completion misses the same fixed deadline', async () => {
+        vi.useFakeTimers();
+        try {
+            const page = createPollingPage([
+                [batchCapture(batchPayload([itinerary()], { finished: false }))],
+            ]);
+            await expect(cmd.func(page, { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5 }))
+                .rejects.toMatchObject({
+                    code: 'TIMEOUT',
+                    message: 'Ctrip returned partial flight batches but did not report search completion within 12s after navigation; partial results were not returned.',
+                    hint: 'Partial results were not returned. Retry the search or try again later.',
+                });
+            expect(page.sleep.mock.calls.reduce((sum, [seconds]) => sum + seconds, 0)).toBe(12);
+        }
+        finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('bounds the final sleep by the remaining monotonic deadline', async () => {
+        vi.useFakeTimers();
+        try {
+            const page = createPollingPage([]);
+            page.evaluate.mockReset().mockImplementation(async () => {
+                await vi.advanceTimersByTimeAsync(11_750);
+                return null;
+            });
+
+            await expect(cmd.func(page, { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5 }))
+                .rejects.toMatchObject({ code: 'TIMEOUT' });
+            expect(page.sleep.mock.calls).toEqual([[0.25]]);
+        }
+        finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('rejects a completed batch returned after the deadline without reading or sleeping again', async () => {
+        vi.useFakeTimers();
+        try {
+            const page = createPollingPage([]);
+            let reads = 0;
+            page.readNetworkCapture.mockReset().mockImplementation(async () => {
+                reads += 1;
+                if (reads === 1) return [];
+                await vi.advanceTimersByTimeAsync(12_001);
+                return [batchCapture(batchPayload([itinerary()], { finished: true }))];
+            });
+
+            await expect(cmd.func(page, { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5 }))
+                .rejects.toMatchObject({
+                    code: 'TIMEOUT',
+                    message: 'No completed batchSearch response was captured within 12s after navigation.',
+                });
+            expect(page.readNetworkCapture).toHaveBeenCalledTimes(2);
+            expect(page.sleep).not.toHaveBeenCalled();
+            expect(page.startNetworkCapture).toHaveBeenCalledTimes(1);
+            expect(page.goto).toHaveBeenCalledTimes(1);
+        }
+        finally {
+            vi.useRealTimers();
+        }
     });
 
     it('throws EmptyResultError only for a completed empty search', async () => {
@@ -877,22 +973,104 @@ describe('ctrip flight command (registry-level)', () => {
             .rejects.toMatchObject({ code: 'EMPTY_RESULT' });
     });
 
-    it('rejects auth HTTP, other HTTP, invalid JSON, upstream, malformed, truncated, and unfinished responses', async () => {
+    it('accumulates false batches across empty drains and lets later itineraries replace earlier values', async () => {
+        vi.useFakeTimers();
+        try {
+            const firstA = itinerary({ id: 'A', price: 700 });
+            const updatedA = itinerary({ id: 'A', price: 500 });
+            const secondB = itinerary({ id: 'B', flightNo: 'MU5101', price: 600 });
+            const page = createPollingPage([
+                [],
+                [batchCapture(batchPayload([firstA], { finished: false }))],
+                [],
+                [batchCapture(batchPayload([updatedA, secondB], { finished: true }))],
+            ]);
+
+            const rows = await cmd.func(page, { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5 });
+
+            expect(rows).toHaveLength(2);
+            expect(rows.map((row) => [row.flightNo, row.price])).toEqual([
+                ['MF8561', 500],
+                ['MU5101', 600],
+            ]);
+            expect(page.startNetworkCapture).toHaveBeenCalledTimes(1);
+            expect(page.goto).toHaveBeenCalledTimes(1);
+            expect(page.sleep).toHaveBeenCalledTimes(3);
+        }
+        finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('rejects HTTP auth responses immediately without exposing provider content', async () => {
         const args = { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5 };
-        await expect(cmd.func(createPageMock([], [batchCapture({}, { responseStatus: 401 })]), args))
-            .rejects.toMatchObject({ code: 'AUTH_REQUIRED', message: expect.stringContaining('HTTP 401') });
-        await expect(cmd.func(createPageMock([], [batchCapture({}, { responseStatus: 500 })]), args))
-            .rejects.toMatchObject({ code: 'COMMAND_EXEC', message: expect.stringContaining('HTTP 500') });
-        await expect(cmd.func(createPageMock([], [batchCapture({}, { responsePreview: '{' })]), args))
-            .rejects.toMatchObject({ code: 'COMMAND_EXEC', message: expect.stringContaining('invalid JSON') });
-        await expect(cmd.func(createPageMock([], [batchCapture(batchPayload([], { status: 7, msg: 'denied' }))]), args))
-            .rejects.toMatchObject({ code: 'COMMAND_EXEC', message: expect.stringContaining('status=7') });
-        await expect(cmd.func(createPageMock([], [batchCapture({ status: 0, data: {} })]), args))
-            .rejects.toMatchObject({ code: 'COMMAND_EXEC', message: expect.stringContaining('malformed batchSearch') });
-        await expect(cmd.func(createPageMock([], [batchCapture({}, { responseBodyTruncated: true })]), args))
-            .rejects.toMatchObject({ code: 'COMMAND_EXEC', message: expect.stringContaining('capture limit') });
-        await expect(cmd.func(createPageMock([], [batchCapture(batchPayload([itinerary()], { finished: false }))]), args))
-            .rejects.toMatchObject({ code: 'COMMAND_EXEC', message: expect.stringContaining('reported completion') });
+        for (const responseStatus of [401, 403]) {
+            await expect(cmd.func(createPageMock([], [batchCapture({}, {
+                responseStatus,
+                responsePreview: 'provider-secret-body',
+            })]), args)).rejects.toMatchObject({
+                code: 'AUTH_REQUIRED',
+                message: 'Ctrip flight API requires authentication or verification.',
+            });
+        }
+    });
+
+    it('fails closed with one safe error for non-auth HTTP, missing/truncated bodies, invalid JSON, upstream errors, and bad shapes', async () => {
+        const args = { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5 };
+        const unsafeCaptures = [
+            batchCapture({}, { responseStatus: 500, responsePreview: 'provider-secret-body' }),
+            batchCapture({}, { responsePreview: undefined }),
+            batchCapture({}, { responseBodyMissing: true, responseBodyError: 'provider-secret-error' }),
+            batchCapture({}, { responseBodyTruncated: true }),
+            batchCapture({}, { responsePreview: '{provider-secret-json' }),
+            batchCapture(batchPayload([], { status: 7, msg: 'provider-secret-message' })),
+            batchCapture({ status: 0, data: {} }),
+        ];
+        for (const capture of unsafeCaptures) {
+            await expect(cmd.func(createPageMock([], [capture]), args)).rejects.toMatchObject({
+                code: 'COMMAND_EXEC',
+                message: 'Ctrip flight batchSearch response could not be safely processed.',
+            });
+        }
+    });
+
+    it('fails closed when a bad batch arrives after valid partial itineraries', async () => {
+        vi.useFakeTimers();
+        try {
+            const page = createPollingPage([
+                [batchCapture(batchPayload([itinerary()], { finished: false }))],
+                [batchCapture({}, {
+                    responseBodyMissing: true,
+                    responseBodyError: 'provider-secret-error',
+                    responsePreview: undefined,
+                })],
+            ]);
+            await expect(cmd.func(page, { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5 }))
+                .rejects.toMatchObject({
+                    code: 'COMMAND_EXEC',
+                    message: 'Ctrip flight batchSearch response could not be safely processed.',
+                });
+        }
+        finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps completion monotonic within a drain and still validates entries after the true marker', async () => {
+        const args = { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5 };
+        const rows = await cmd.func(createPageMock([], [
+            batchCapture(batchPayload([itinerary({ id: 'A' })], { finished: true })),
+            batchCapture(batchPayload([itinerary({ id: 'B', flightNo: 'MU5101' })], { finished: false })),
+        ]), args);
+        expect(rows.map((row) => row.flightNo)).toEqual(['MF8561', 'MU5101']);
+
+        await expect(cmd.func(createPageMock([], [
+            batchCapture(batchPayload([itinerary({ id: 'A' })], { finished: true })),
+            batchCapture({}, { responsePreview: '{provider-secret-json' }),
+        ]), args)).rejects.toMatchObject({
+            code: 'COMMAND_EXEC',
+            message: 'Ctrip flight batchSearch response could not be safely processed.',
+        });
     });
 
     it('builds URL with lowercase IATA codes and Y_S_C_F cabin', async () => {
@@ -941,7 +1119,10 @@ describe('ctrip flight command (registry-level)', () => {
         malformed.flightSegments[0].flightList[0].arrivalAirportName = '';
         const page = createPageMock([], [batchCapture(batchPayload([itinerary(), malformed]))]);
         await expect(cmd.func(page, { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5 }))
-            .rejects.toMatchObject({ code: 'COMMAND_EXEC', message: expect.stringContaining('index 1') });
+            .rejects.toMatchObject({
+                code: 'COMMAND_EXEC',
+                message: 'Ctrip flight batchSearch response could not be safely processed.',
+            });
     });
 
     it('merges multiple completed batches, deduplicates itineraries, and joins connecting legs', async () => {
