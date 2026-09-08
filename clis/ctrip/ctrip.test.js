@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
 import { getRegistry } from '@jackwener/opencli/registry';
 import './search.js';
@@ -1276,14 +1276,20 @@ describe('ctrip flight-discover command (registry-level)', () => {
         })).rejects.toMatchObject({ code: 'AUTH_REQUIRED' });
         await expect(cmd.func(createPageMock([true, 'timeout']), {
             from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5,
-        })).rejects.toMatchObject({ code: 'COMMAND_EXEC', message: 'Ctrip flight-discover page evidence was missing or inconsistent' });
+        })).rejects.toMatchObject({
+            code: 'TIMEOUT',
+            message: 'Ctrip visible first-screen flight wait timed out after 20s',
+        });
         await expect(cmd.func(createPageMock([true, 'content', {
             scope_valid: false,
             observed_scope: { origin: 'CAN' },
             items: [{ airline: '不应返回' }],
         }]), {
             from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5,
-        })).rejects.toMatchObject({ code: 'COMMAND_EXEC', message: 'Ctrip flight-discover page evidence was missing or inconsistent' });
+        })).rejects.toMatchObject({
+            code: 'COMMAND_EXEC',
+            message: 'Ctrip flight-discover visible search scope was missing or did not match the request',
+        });
     });
 
     it('rejects malformed times and non-airport tokens returned by the page extractor', async () => {
@@ -1304,7 +1310,92 @@ describe('ctrip flight-discover command (registry-level)', () => {
             }],
         }]);
         await expect(cmd.func(page, { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5 }))
-            .rejects.toMatchObject({ code: 'COMMAND_EXEC', message: 'Ctrip flight-discover page evidence was missing or inconsistent' });
+            .rejects.toMatchObject({
+                code: 'COMMAND_EXEC',
+                message: 'Ctrip flight-discover visible flight-card extraction returned invalid output',
+            });
+    });
+});
+
+describe('ctrip flight-discover readiness wait (JSDOM)', () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    function startWait(html = '', url = 'https://flights.ctrip.com/online/list/oneway-pek-sha') {
+        const dom = new JSDOM(`<!doctype html><html><body>${html}</body></html>`,
+            { url });
+        Object.defineProperty(dom.window, 'innerHeight', { value: 720 });
+        Object.defineProperty(dom.window, 'innerWidth', { value: 800 });
+        dom.window.HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
+            return { x: 0, y: 100, top: 100, bottom: 160, left: 0, right: 600, width: 600, height: 60, toJSON() {} };
+        };
+        const promise = Function(
+            'document', 'location', 'getComputedStyle', 'innerHeight', 'innerWidth',
+            'setTimeout',
+            `return (${flightDiscoverTest.WAIT_FOR_DISCOVERY_JS})`,
+        )(
+            dom.window.document,
+            dom.window.location,
+            dom.window.getComputedStyle.bind(dom.window),
+            dom.window.innerHeight,
+            dom.window.innerWidth,
+            setTimeout,
+        );
+        return { dom, promise };
+    }
+
+    it('keeps waiting for a visible first-screen card that appears after 12 seconds', async () => {
+        vi.useFakeTimers();
+        const { dom, promise } = startWait();
+
+        await vi.advanceTimersByTimeAsync(12_250);
+        const card = dom.window.document.createElement('div');
+        card.className = 'flight-item';
+        card.textContent = '可见航班';
+        dom.window.document.body.append(card);
+        await vi.advanceTimersByTimeAsync(249);
+        let result;
+        void promise.then((value) => { result = value; });
+        expect(result).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(1);
+
+        await expect(promise).resolves.toBe('content');
+    });
+
+    it('detects a card that becomes visible through a style-only change', async () => {
+        vi.useFakeTimers();
+        const { dom, promise } = startWait('<div class="flight-item" style="display:none">延迟显示航班</div>');
+
+        await vi.advanceTimersByTimeAsync(12_250);
+        dom.window.document.querySelector('.flight-item').style.display = 'block';
+        await vi.advanceTimersByTimeAsync(250);
+
+        await expect(promise).resolves.toBe('content');
+    });
+
+    it('times out once at the fixed 20-second deadline when no card becomes visible', async () => {
+        vi.useFakeTimers();
+        const { dom, promise } = startWait('<div class="flight-item" style="display:none">始终隐藏航班</div>');
+        let result;
+        void promise.then((value) => { result = value; });
+
+        await vi.advanceTimersByTimeAsync(10_000);
+        dom.window.document.querySelector('.flight-item').style.opacity = '0.5';
+        await vi.advanceTimersByTimeAsync(9_750);
+        expect(result).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(250);
+
+        await expect(promise).resolves.toBe('timeout');
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('returns captcha immediately without starting the discovery deadline', async () => {
+        vi.useFakeTimers();
+        const { promise } = startWait('', 'https://flights.ctrip.com/captcha/challenge');
+
+        await expect(promise).resolves.toBe('captcha');
+        expect(vi.getTimerCount()).toBe(0);
     });
 });
 
