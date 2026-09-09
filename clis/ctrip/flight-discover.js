@@ -1,62 +1,34 @@
 /**
- * Bounded one-way flight discovery from the first screen after one top reset.
- * It never scrolls downward to load more results.
+ * Bounded one-way flight discovery across actually visible result cards.
  */
 import { ArgumentError, AuthRequiredError, CommandExecutionError, TimeoutError } from '@jackwener/opencli/errors';
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { parseIataCode, parseIsoDate, parseStrictIntegerRange } from './utils.js';
 
-const MAX_DISCOVERY_ITEMS = 5;
+const DEFAULT_DISCOVERY_ITEMS = 20;
+const MAX_DISCOVERY_ITEMS = 40;
 const DISCOVERY_WAIT_SECONDS = 20;
+const DISCOVERY_DEADLINE_MS = 45000;
+const DISCOVERY_SCROLL_LIMIT = 12;
 const DISCOVERY_SCOPE_ERROR = 'Ctrip flight-discover visible search scope was missing or did not match the request';
 const DISCOVERY_OUTPUT_ERROR = 'Ctrip flight-discover visible flight-card extraction returned invalid output';
-const RESET_TO_TOP_JS = '(() => { window.scrollTo(0, 0); return true; })()';
-const WAIT_FOR_DISCOVERY_JS = `
-  new Promise((resolve) => {
-    const visible = (element) => {
-      if (!element) return false;
-      let ancestor = element;
-      let depth = 0;
-      while (ancestor && depth < 64) {
-        const style = getComputedStyle(ancestor);
-        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
-        if (ancestor === document.documentElement) break;
-        ancestor = ancestor.parentElement;
-        depth += 1;
-      }
-      if (ancestor !== document.documentElement) return false;
-      const rect = element.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0
-        && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
-    };
-    const detect = () => {
-      if (location.pathname.includes('captcha') || /验证码|verify the human|安全验证/i.test(document.body?.innerText || '')) return 'captcha';
-      if ([...document.querySelectorAll('.flight-item')].some(visible)) return 'content';
-      return null;
-    };
-    const found = detect();
-    if (found) return resolve(found);
-    const deadline = Date.now() + ${DISCOVERY_WAIT_SECONDS * 1000};
-    const poll = () => {
-      if (Date.now() >= deadline) return resolve('timeout');
-      const result = detect();
-      if (result) return resolve(result);
-      setTimeout(poll, Math.min(250, deadline - Date.now()));
-    };
-    setTimeout(poll, 250);
-  })
-`;
 
 function buildFlightDiscoveryExtractJs(requestedScope, limit) {
     const requestedJson = JSON.stringify(requestedScope);
-    const boundedLimit = Math.min(MAX_DISCOVERY_ITEMS, Math.max(1, Number(limit) || MAX_DISCOVERY_ITEMS));
-    return `(() => {
+    const boundedLimit = Math.min(MAX_DISCOVERY_ITEMS, Math.max(1, Number(limit) || DEFAULT_DISCOVERY_ITEMS));
+    return `new Promise((resolve) => {
+      const collect = async () => {
       const requested = ${requestedJson};
       const limit = ${boundedLimit};
+      const startedAt = performance.now();
+      const deadline = startedAt + ${DISCOVERY_DEADLINE_MS};
+      const readinessDeadline = Math.min(deadline, startedAt + ${DISCOVERY_WAIT_SECONDS * 1000});
+      const sleep = (milliseconds) => new Promise((done) => setTimeout(done, milliseconds));
+      window.scrollTo(0, 0);
       const clean = (value) => String(value || '').replace(/[\\uE000-\\uF8FF]/g, '').replace(/\\s+/g, ' ').trim();
-      if (document.location.pathname.includes('captcha') || /验证码|verify the human|安全验证/i.test(document.body?.innerText || document.body?.textContent || '')) {
-        return { captcha: true };
-      }
+      const hasCaptcha = () => document.location.pathname.includes('captcha') ||
+        /验证码|verify the human|安全验证/i.test(document.body?.innerText || document.body?.textContent || '');
+      if (hasCaptcha()) return resolve({ captcha: true });
       const stylesVisibleThrough = (element, boundary) => {
         let ancestor = element;
         let depth = 0;
@@ -76,6 +48,11 @@ function buildFlightDiscoveryExtractJs(requestedScope, limit) {
         return rect.width > 0 && rect.height > 0
           && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
       };
+      while (![...document.querySelectorAll('.flight-item')].some(visible)) {
+        if (hasCaptcha()) return resolve({ captcha: true });
+        if (performance.now() >= readinessDeadline) return resolve({ initial_timeout: true });
+        await sleep(Math.min(250, readinessDeadline - performance.now()));
+      }
       const visibleText = (selector, root = document) => {
         const element = root.querySelector(selector);
         return visible(element) ? clean(element.textContent) : null;
@@ -84,41 +61,46 @@ function buildFlightDiscoveryExtractJs(requestedScope, limit) {
         const matches = [...String(value || '').matchAll(/\\(([A-Z]{3})\\)/g)];
         return matches.length ? matches[matches.length - 1][1] : null;
       };
-      const form = document.querySelector('form#searchForm');
-      const originInput = form?.querySelector('input[name="owDCity"]');
-      const destinationInput = form?.querySelector('input[name="owACity"]');
-      const dateInput = form?.querySelector('#datePicker input[aria-label="请选择日期"]');
-      const activeTrip = form?.querySelector('li.active');
-      const origin = visible(originInput) ? iataFrom(originInput.value) : null;
-      const destination = visible(destinationInput) ? iataFrom(destinationInput.value) : null;
-      const departureDate = visible(dateInput) ? clean(dateInput.value) : null;
-      const tripType = visible(activeTrip) && clean(activeTrip.textContent).includes('单程') ? 'one_way' : null;
-      const passengerCounts = { adults: null, children: null, infants: null };
-      for (const span of form?.querySelectorAll('span') || []) {
-        if (!visible(span)) continue;
-        const match = clean(span.textContent).match(/^(\\d+)(成人|儿童|婴儿)$/);
-        if (!match) continue;
-        const field = match[2] === '成人' ? 'adults' : match[2] === '儿童' ? 'children' : 'infants';
-        passengerCounts[field] = Number(match[1]);
-      }
-      const cabinFilterLabel = visibleText('.flt-subclass .form-select-v3', form);
-      const timeHint = visibleText('.result-header .hint');
-      const timeBasis = timeHint?.includes('当地时间') ? 'page_displayed_local_time' : null;
-      const observedScope = {
-        origin,
-        destination,
-        departure_date: departureDate,
-        trip_type: tripType,
-        adults: passengerCounts.adults,
-        children: passengerCounts.children,
-        infants: passengerCounts.infants,
-        cabin_filter_label: cabinFilterLabel,
-        time_basis: timeBasis,
+      const readScope = (requireVisible) => {
+        const form = document.querySelector('form#searchForm');
+        const originInput = form?.querySelector('input[name="owDCity"]');
+        const destinationInput = form?.querySelector('input[name="owACity"]');
+        const dateInput = form?.querySelector('#datePicker input[aria-label="请选择日期"]');
+        const activeTrip = form?.querySelector('li.active');
+        const cabin = form?.querySelector('.flt-subclass .form-select-v3');
+        const timeHint = document.querySelector('.result-header .hint');
+        const readable = (element) => Boolean(element) && (!requireVisible || visible(element));
+        const passengerCounts = { adults: null, children: null, infants: null };
+        for (const span of form?.querySelectorAll('span') || []) {
+          if (!readable(span)) continue;
+          const match = clean(span.textContent).match(/^(\\d+)(成人|儿童|婴儿)$/);
+          if (!match) continue;
+          const field = match[2] === '成人' ? 'adults' : match[2] === '儿童' ? 'children' : 'infants';
+          passengerCounts[field] = Number(match[1]);
+        }
+        return {
+          origin: readable(originInput) ? iataFrom(originInput.value) : null,
+          destination: readable(destinationInput) ? iataFrom(destinationInput.value) : null,
+          departure_date: readable(dateInput) ? clean(dateInput.value) : null,
+          trip_type: readable(activeTrip) && clean(activeTrip.textContent).includes('单程') ? 'one_way' : null,
+          adults: passengerCounts.adults,
+          children: passengerCounts.children,
+          infants: passengerCounts.infants,
+          cabin_filter_label: readable(cabin) ? clean(cabin.textContent) : null,
+          time_basis: readable(timeHint) && clean(timeHint.textContent).includes('当地时间')
+            ? 'page_displayed_local_time' : null,
+        };
       };
-      const scopeValid = origin === requested.origin && destination === requested.destination
-        && departureDate === requested.departure_date && tripType === 'one_way'
-        && passengerCounts.adults === 1 && passengerCounts.children === 0 && passengerCounts.infants === 0
-        && Boolean(cabinFilterLabel) && timeBasis === 'page_displayed_local_time';
+      const scopeMatches = (scope) => scope.origin === requested.origin && scope.destination === requested.destination
+        && scope.departure_date === requested.departure_date && scope.trip_type === 'one_way'
+        && scope.adults === 1 && scope.children === 0 && scope.infants === 0
+        && Boolean(scope.cabin_filter_label) && scope.time_basis === 'page_displayed_local_time';
+      const sameScope = (left, right) => left.origin === right.origin && left.destination === right.destination
+        && left.departure_date === right.departure_date && left.trip_type === right.trip_type
+        && left.adults === right.adults && left.children === right.children && left.infants === right.infants
+        && left.cabin_filter_label === right.cabin_filter_label && left.time_basis === right.time_basis;
+      const observedScope = readScope(true);
+      const scopeValid = scopeMatches(observedScope);
 
       const countText = visibleText('.recommend-box.header .total');
       const totalMatch = countText?.match(/共\\s*(\\d+)\\s*个航班/);
@@ -218,13 +200,10 @@ function buildFlightDiscoveryExtractJs(requestedScope, limit) {
           passenger_basis: 'unknown',
         };
       };
-      const items = [];
-      for (const card of document.querySelectorAll('.flight-item')) {
-        if (items.length >= limit) break;
-        if (!visible(card)) continue;
+      const parseCard = (card) => {
         const tokens = tokensOf(card);
         const timeIndexes = tokens.map((token, index) => timePattern.test(token) ? index : -1).filter((index) => index >= 0);
-        if (tokens.length === 0 || timeIndexes.length < 2) continue;
+        if (tokens.length === 0 || timeIndexes.length < 2) return null;
         const departureIndex = timeIndexes[0];
         const arrivalIndex = timeIndexes[timeIndexes.length - 1];
         const flightNumbers = tokens.slice(0, departureIndex).filter((token) => flightPattern.test(token));
@@ -235,10 +214,10 @@ function buildFlightDiscoveryExtractJs(requestedScope, limit) {
         const directText = tokens.find((token) => token === '直飞');
         const departureAirport = airportAfter(tokens, departureIndex);
         const arrivalAirport = airportAfter(tokens, arrivalIndex);
-        if (!departureAirport || !arrivalAirport) continue;
-        items.push({
+        if (flightNumbers.length === 0 || !departureAirport || !arrivalAirport) return null;
+        return {
           airline: tokens[0] || null,
-          flight_number: flightNumbers.length ? flightNumbers.join(' / ') : null,
+          flight_number: flightNumbers.join(' / '),
           departure_datetime: requested.departure_date + ' ' + tokens[departureIndex],
           departure_airport: departureAirport,
           arrival_datetime: addDays(requested.departure_date, dayOffset) + ' ' + tokens[arrivalIndex],
@@ -247,16 +226,120 @@ function buildFlightDiscoveryExtractJs(requestedScope, limit) {
           connection_type: transferText ? 'connecting' : directText ? 'direct' : null,
           duration,
           displayed_price: displayedPriceOf(card),
-        });
+        };
+      };
+      if (!scopeValid) return resolve({
+        scope_valid: false,
+        observed_scope: observedScope,
+        page_reported_counts: pageReportedCounts,
+        sort_label: sortLabel,
+        items: [],
+      });
+
+      const observations = new Map();
+      let identityConflict = false;
+      const scanVisibleCards = () => {
+        for (const card of document.querySelectorAll('.flight-item')) {
+          if (performance.now() >= deadline) break;
+          if (!visible(card)) continue;
+          const item = parseCard(card);
+          if (!item) continue;
+          const identity = JSON.stringify([
+            item.flight_number,
+            item.departure_datetime,
+            item.departure_airport,
+            item.arrival_datetime,
+            item.arrival_airport,
+          ]);
+          const providerId = clean(card.getAttribute('data-testid'));
+          const key = providerId ? 'provider:' + providerId : 'identity:' + identity;
+          const previous = observations.get(key);
+          if (previous && previous.identity !== identity) {
+            identityConflict = true;
+            continue;
+          }
+          if (previous || observations.size < limit) observations.set(key, { identity, item });
+        }
+      };
+      const changedScope = () => {
+        const currentScope = readScope(false);
+        return scopeMatches(currentScope) && sameScope(currentScope, observedScope) ? null : currentScope;
+      };
+      const interrupted = () => {
+        if (hasCaptcha()) return { captcha: true };
+        const driftedScope = changedScope();
+        return driftedScope ? {
+          scope_valid: false,
+          scope_drift: true,
+          observed_scope: driftedScope,
+          page_reported_counts: pageReportedCounts,
+          sort_label: sortLabel,
+          items: [],
+        } : null;
+      };
+
+      scanVisibleCards();
+      if (identityConflict) return resolve({ identity_conflict: true });
+      let scrollCount = 0;
+      let roundsWithoutNewItems = 0;
+      let stopReason = performance.now() >= deadline ? 'time_budget' : observations.size >= limit ? 'limit' : null;
+      while (!stopReason) {
+        const interruption = interrupted();
+        if (interruption) return resolve(interruption);
+        if (performance.now() >= deadline) {
+          stopReason = 'time_budget';
+          break;
+        }
+        if (scrollCount >= ${DISCOVERY_SCROLL_LIMIT}) {
+          stopReason = 'scroll_limit';
+          break;
+        }
+
+        window.scrollBy(0, Math.max(1, Math.floor(innerHeight * 0.8)));
+        scrollCount += 1;
+        const afterScrollInterruption = interrupted();
+        if (afterScrollInterruption) return resolve(afterScrollInterruption);
+        const sizeBeforeRound = observations.size;
+        const roundDeadline = Math.min(deadline, performance.now() + 1000);
+        scanVisibleCards();
+        if (identityConflict) return resolve({ identity_conflict: true });
+        const afterScanInterruption = interrupted();
+        if (afterScanInterruption) return resolve(afterScanInterruption);
+        while (observations.size < limit && performance.now() < roundDeadline) {
+          const pendingInterruption = interrupted();
+          if (pendingInterruption) return resolve(pendingInterruption);
+          await sleep(Math.min(250, roundDeadline - performance.now()));
+          const settledInterruption = interrupted();
+          if (settledInterruption) return resolve(settledInterruption);
+          scanVisibleCards();
+          if (identityConflict) return resolve({ identity_conflict: true });
+        }
+        const foundNewItems = observations.size > sizeBeforeRound;
+        roundsWithoutNewItems = foundNewItems ? 0 : roundsWithoutNewItems + 1;
+        if (performance.now() >= deadline) stopReason = 'time_budget';
+        else if (observations.size >= limit) stopReason = 'limit';
+        else if (roundsWithoutNewItems >= 3) stopReason = 'plateau';
+        else if (scrollCount >= ${DISCOVERY_SCROLL_LIMIT}) stopReason = 'scroll_limit';
       }
-      return {
+
+      const items = [...observations.values()].map(({ item }) => item).slice(0, limit);
+      return resolve({
         scope_valid: scopeValid,
         observed_scope: observedScope,
         page_reported_counts: pageReportedCounts,
         sort_label: sortLabel,
         items,
+        collection: {
+          requested_limit: limit,
+          returned_count: items.length,
+          scroll_count: scrollCount,
+          stop_reason: stopReason,
+          duration_ms: Math.round(Math.max(0, performance.now() - startedAt)),
+        },
+      });
       };
-    })()`;
+      void collect().catch(() => resolve({ extraction_error: true }));
+    })`;
 }
 
 function cleanString(value) {
@@ -328,7 +411,7 @@ cli({
     site: 'ctrip',
     name: 'flight-discover',
     access: 'read',
-    description: '返回携程单程页重置到顶部后的首屏可见航班候选（不向下滚动加载更多；可含展示起价，但不是报价或库存）',
+    description: '返回携程单程页有界滚动中实际可见的航班候选（可含展示起价，但不是报价或库存）',
     domain: 'flights.ctrip.com',
     strategy: Strategy.COOKIE,
     browser: true,
@@ -338,7 +421,7 @@ cli({
         { name: 'from', required: true, positional: true, help: 'Departure IATA code (e.g. BJS / PEK)' },
         { name: 'to', required: true, positional: true, help: 'Arrival IATA code (e.g. SHA / PVG)' },
         { name: 'date', required: true, help: 'Departure date (YYYY-MM-DD)' },
-        { name: 'limit', default: 5, help: 'Number of visible candidates (1-5)' },
+        { name: 'limit', default: DEFAULT_DISCOVERY_ITEMS, help: 'Number of visibly observed candidates (1-40)' },
     ],
     func: async (page, kwargs) => {
         const origin = parseIataCode('from', kwargs.from);
@@ -347,7 +430,7 @@ cli({
             throw new ArgumentError(`--from and --to must differ (got ${origin})`);
         }
         const departureDate = parseIsoDate('date', kwargs.date);
-        const limit = parseStrictIntegerRange('limit', kwargs.limit, MAX_DISCOVERY_ITEMS, 1, MAX_DISCOVERY_ITEMS);
+        const limit = parseStrictIntegerRange('limit', kwargs.limit, DEFAULT_DISCOVERY_ITEMS, 1, MAX_DISCOVERY_ITEMS);
         const requestedScope = {
             origin,
             destination,
@@ -357,24 +440,22 @@ cli({
             `https://flights.ctrip.com/online/list/oneway-${origin.toLowerCase()}-${destination.toLowerCase()}` +
             `?depdate=${departureDate}&cabin=Y_S_C_F&adult=1&child=0&infant=0`;
         await page.goto(searchUrl);
-        await page.evaluate(RESET_TO_TOP_JS);
-        const readiness = await page.evaluate(WAIT_FOR_DISCOVERY_JS);
-        if (readiness === 'captcha') {
-            throw new AuthRequiredError('flights.ctrip.com', 'Ctrip is asking for a captcha; complete it in your browser session and retry');
-        }
-        if (readiness === 'timeout') {
-            throw new TimeoutError(
-                'Ctrip visible first-screen flight wait',
-                DISCOVERY_WAIT_SECONDS,
-                'The fixed page-side discovery wait expired before a visible first-screen flight card appeared; check the Ctrip browser session and retry.',
-            );
-        }
-        if (readiness !== 'content') {
-            throw new CommandExecutionError(DISCOVERY_OUTPUT_ERROR);
-        }
         const raw = await page.evaluate(buildFlightDiscoveryExtractJs(requestedScope, limit));
         if (raw?.captcha === true) {
             throw new AuthRequiredError('flights.ctrip.com', 'Ctrip is asking for a captcha; complete it in your browser session and retry');
+        }
+        if (raw?.initial_timeout === true) {
+            throw new TimeoutError(
+                'Ctrip visible initial flight wait',
+                DISCOVERY_WAIT_SECONDS,
+                'No visible flight card appeared during the fixed initial readiness window; check the Ctrip browser session and retry.',
+            );
+        }
+        if (raw?.identity_conflict === true) {
+            throw new CommandExecutionError(DISCOVERY_OUTPUT_ERROR);
+        }
+        if (raw?.extraction_error === true) {
+            throw new CommandExecutionError(DISCOVERY_OUTPUT_ERROR);
         }
         if (!raw || typeof raw !== 'object') {
             throw new CommandExecutionError(DISCOVERY_OUTPUT_ERROR);
@@ -400,6 +481,15 @@ cli({
             throw new CommandExecutionError(DISCOVERY_OUTPUT_ERROR);
         }
         const sortLabel = cleanString(raw.sort_label);
+        const collection = raw.collection;
+        const stopReasons = ['limit', 'time_budget', 'scroll_limit', 'plateau'];
+        if (!collection || typeof collection !== 'object' || collection.requested_limit !== limit ||
+            raw.items.length > limit || collection.returned_count !== raw.items.length ||
+            !Number.isSafeInteger(collection.scroll_count) || collection.scroll_count < 0 || collection.scroll_count > 12 ||
+            !stopReasons.includes(collection.stop_reason) ||
+            !Number.isSafeInteger(collection.duration_ms) || collection.duration_ms < 0 || collection.duration_ms > 60000) {
+            throw new CommandExecutionError(DISCOVERY_OUTPUT_ERROR);
+        }
         const normalizedCounts = pageReportedCounts === null ? null : {
             total_results: pageReportedCounts.total_results,
             ...(pageReportedCounts.direct_results === undefined ? {} : { direct_results: pageReportedCounts.direct_results }),
@@ -418,7 +508,14 @@ cli({
                 cabin_filter_label: cleanString(scope.cabin_filter_label),
                 time_basis: scope.time_basis,
             },
-            coverage: 'observed_initial_results',
+            coverage: 'observed_bounded_results',
+            collection: {
+                requested_limit: collection.requested_limit,
+                returned_count: collection.returned_count,
+                scroll_count: collection.scroll_count,
+                stop_reason: collection.stop_reason,
+                duration_ms: collection.duration_ms,
+            },
             page_reported_counts: normalizedCounts,
             sort_label: sortLabel,
             items: raw.items.slice(0, limit).map(normalizeDiscoveryItem),
@@ -426,4 +523,4 @@ cli({
     },
 });
 
-export const __test__ = { buildFlightDiscoveryExtractJs, RESET_TO_TOP_JS, WAIT_FOR_DISCOVERY_JS };
+export const __test__ = { buildFlightDiscoveryExtractJs };
