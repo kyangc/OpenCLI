@@ -1183,6 +1183,7 @@ describe('ctrip flight-discover command (registry-level)', () => {
         });
         expect(cmd.columns).toBeUndefined();
         expect(cmd.args.map((arg) => arg.name)).toEqual(['from', 'to', 'date', 'limit']);
+        expect(cmd.description).toContain('可含展示起价，但不是报价或库存');
     });
 
     it('returns a scope-verified first-screen envelope without quote or ranking fields', async () => {
@@ -1216,9 +1217,15 @@ describe('ctrip flight-discover command (registry-level)', () => {
                     overnight: false,
                     connection_type: 'direct',
                     duration: `1时55分\uE60C`,
+                    displayed_price: {
+                        amount: '487.50', currency_symbol: '¥', qualifier: 'starting',
+                        tax_inclusion: 'included', passenger_basis: 'unknown', raw: 'drop',
+                    },
                     price: 487,
                     currency: 'CNY',
                     rank: 1,
+                    inventory: '余票充足',
+                    booking_cta: '订票',
                 }],
             },
         ]);
@@ -1246,9 +1253,13 @@ describe('ctrip flight-discover command (registry-level)', () => {
                 overnight: false,
                 connection_type: 'direct',
                 duration: '1时55分',
+                displayed_price: {
+                    amount: '487.50', currency_symbol: '¥', qualifier: 'starting',
+                    tax_inclusion: 'included', passenger_basis: 'unknown',
+                },
             }],
         });
-        expect(JSON.stringify(result)).not.toMatch(/price|currency|rank|lowest|all_results|[\uE000-\uF8FF]/i);
+        expect(JSON.stringify(result)).not.toMatch(/"price"|"currency"|"raw"|rank|lowest|all_results|inventory|booking|余票|订票|[\uE000-\uF8FF]/i);
         expect(page.goto).toHaveBeenCalledTimes(1);
         expect(page.evaluate).toHaveBeenCalledTimes(3);
         expect(page.evaluate.mock.calls[0][0]).toBe(flightDiscoverTest.RESET_TO_TOP_JS);
@@ -1258,6 +1269,35 @@ describe('ctrip flight-discover command (registry-level)', () => {
         expect(page.evaluate.mock.invocationCallOrder[0]).toBeLessThan(page.evaluate.mock.invocationCallOrder[1]);
         expect(page.scroll).not.toHaveBeenCalled();
         expect(page.autoScroll).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['missing', undefined],
+        ['malformed', { amount: 487, currency_symbol: 'CNY', qualifier: 'quote' }],
+    ])('keeps a valid candidate when optional displayed price is %s', async (_label, displayedPrice) => {
+        const item = {
+            airline: '厦门航空', flight_number: 'MF8561',
+            departure_datetime: '2026-06-15 07:50', departure_airport: '北京大兴国际机场',
+            arrival_datetime: '2026-06-15 09:45', arrival_airport: '上海浦东国际机场',
+            overnight: false, connection_type: 'direct', duration: '1时55分',
+        };
+        if (displayedPrice !== undefined) item.displayed_price = displayedPrice;
+        const page = createPageMock([true, 'content', {
+            scope_valid: true,
+            observed_scope: {
+                origin: 'PEK', destination: 'SHA', departure_date: '2026-06-15',
+                trip_type: 'one_way', adults: 1, children: 0, infants: 0,
+                cabin_filter_label: '经济舱', time_basis: 'page_displayed_local_time',
+            },
+            page_reported_counts: null,
+            sort_label: null,
+            items: [item],
+        }]);
+
+        const result = await cmd.func(page, { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5 });
+
+        expect(result.items).toHaveLength(1);
+        expect(result.items[0].displayed_price).toBeNull();
     });
 
     it('rejects invalid input before navigation and fails closed on captcha, blank, or scope drift', async () => {
@@ -1408,11 +1448,13 @@ describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
             ? `<div class="flight-item" data-top="${100 + index * 90}">
                 长荣航空 BR751 BR116 20:05 浦东国际机场 T2 需中国台湾过境签 转1次 转 中国台北 12h10m
                 <span>15:00</span><span>+1</span><span>天</span><span>新千岁机场</span> 国际航站楼 22小时 航班详情 ¥ 4999 起
+                <div class="flight-price"><span class="price">¥4999</span><span class="qi">起</span><span class="tip">含税价</span></div>
               </div>`
             : `<div class="flight-item" data-top="${100 + index * 90}">
                 <span style="display:none"><span>隐藏航空 ZZ999</span></span>
                 东方航空 MU27${index} 空客321(中) 08:0${index} 浦东国际机场 T1
                 12:3${index} 新千岁机场 国际航站楼 3小时30分 航班详情 ¥ ${5191 + index} 起
+                <div class="flight-price"><span class="price">¥${5191 + index}</span><span class="qi">起</span><span class="tip">含税价</span></div>
               </div>`).join('');
         const dom = new JSDOM(`<!doctype html><html><body>
           <form id="searchForm">
@@ -1446,7 +1488,7 @@ describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
         );
     }
 
-    it('extracts at most five in-viewport cards and only page-observed non-price facts', () => {
+    it('keeps each card paired with its exact visible tax-included starting-price string', () => {
         const result = runExtract();
         expect(result).toMatchObject({
             scope_valid: true,
@@ -1464,14 +1506,65 @@ describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
             departure_datetime: '2026-10-02 08:00', departure_airport: '浦东国际机场',
             arrival_datetime: '2026-10-02 12:30', arrival_airport: '新千岁机场',
             overnight: false, connection_type: null, duration: '3小时30分',
+            displayed_price: {
+                amount: '5191', currency_symbol: '¥', qualifier: 'starting',
+                tax_inclusion: 'included', passenger_basis: 'unknown',
+            },
         });
         expect(result.items[1]).toMatchObject({
             airline: '长荣航空', flight_number: 'BR751 / BR116',
             arrival_datetime: '2026-10-03 15:00', overnight: true,
             connection_type: 'connecting', duration: '22小时',
+            displayed_price: {
+                amount: '4999', currency_symbol: '¥', qualifier: 'starting',
+                tax_inclusion: 'included', passenger_basis: 'unknown',
+            },
         });
-        expect(JSON.stringify(result.items)).not.toMatch(/4999|5191|price|currency|rank/i);
+        expect(JSON.stringify(result.items)).not.toMatch(/currency":|rank|inventory|availability/i);
         expect(result.items.some((item) => item.airline === '屏幕外航空')).toBe(false);
+    });
+
+    it.each([
+        ['hidden', '<div class="flight-price" style="display:none"><span class="price">¥777</span><span class="qi">起</span><span class="tip">含税价</span></div>'],
+        ['struck through', '<div class="flight-price"><span class="price" style="text-decoration:line-through">¥777</span><span class="qi">起</span><span class="tip">含税价</span></div>'],
+        ['missing starting marker', '<div class="flight-price"><span class="price">¥777</span><span class="qi"></span><span class="tip">含税价</span></div>'],
+        ['missing tax marker', '<div class="flight-price"><span class="price">¥777</span><span class="qi">起</span><span class="tip"></span></div>'],
+        ['hidden starting marker', '<div class="flight-price"><span class="price">¥777</span><span class="qi" style="display:none">起</span><span class="tip">含税价</span></div>'],
+        ['hidden tax marker', '<div class="flight-price"><span class="price">¥777</span><span class="qi">起</span><span class="tip" style="display:none">含税价</span></div>'],
+        ['struck starting marker', '<div class="flight-price"><span class="price">¥777</span><span class="qi" style="text-decoration:line-through">起</span><span class="tip">含税价</span></div>'],
+        ['struck tax marker', '<div class="flight-price"><span class="price">¥777</span><span class="qi">起</span><span class="tip" style="text-decoration:line-through">含税价</span></div>'],
+        ['conflicting', '<div class="flight-price"><span class="price">¥777</span><span class="qi">起</span><span class="tip">含税价</span></div><div class="flight-price"><span class="price">¥778</span><span class="qi">起</span><span class="tip">含税价</span></div>'],
+        ['multiple amounts in one region', '<div class="flight-price"><span class="price">¥777</span><span class="price">¥888</span><span class="qi">起</span><span class="tip">含税价</span></div>'],
+        ['multiple qualifiers in one region', '<div class="flight-price"><span class="price">¥777</span><span class="qi">起</span><span class="qi">起</span><span class="tip">含税价</span></div>'],
+        ['multiple tax labels in one region', '<div class="flight-price"><span class="price">¥777</span><span class="qi">起</span><span class="tip">含税价</span><span class="tip">含税价</span></div>'],
+        ['malformed', '<div class="flight-price"><span class="price">¥1234567890.999</span><span class="qi">起</span><span class="tip">含税价</span></div>'],
+    ])('keeps the candidate but returns null for %s optional price evidence', (_label, priceMarkup) => {
+        const card = `<div class="flight-item" data-top="40">
+          测试航空 TT1234 09:00 浦东国际机场 12:00 新千岁机场 3小时
+          ${priceMarkup}
+        </div>`;
+        const result = runExtract(undefined, card);
+        const item = result.items.find((candidate) => candidate.airline === '测试航空');
+
+        expect(item).toBeDefined();
+        expect(item.displayed_price).toBeNull();
+        expect(item).not.toHaveProperty('inventory');
+        expect(item).not.toHaveProperty('availability');
+    });
+
+    it('reads only visible current text from each unique price field', () => {
+        const card = `<div class="flight-item" data-top="40">
+          可见文本航空 VT1234 09:00 浦东国际机场 12:00 新千岁机场 3小时
+          <div class="flight-price">
+            <span class="price">¥5<span style="display:none">99</span></span>
+            <span class="qi">起</span><span class="tip">含税价</span>
+          </div>
+        </div>`;
+        const result = runExtract(undefined, card);
+        const item = result.items.find((candidate) => candidate.airline === '可见文本航空');
+
+        expect(item.displayed_price).toMatchObject({ amount: '5' });
+        expect(item.displayed_price.amount).not.toBe('599');
     });
 
     it('marks the extraction invalid when the visible search scope drifts', () => {
