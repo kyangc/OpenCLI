@@ -12,7 +12,7 @@ const SENSITIVE_HEADER_NAMES = new Set([
 ]);
 
 const SENSITIVE_FIELD_PATTERN = /(password|passwd|pwd|token|secret|authorization|cookie|set-cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?id|csrf|xsrf)/i;
-const SENSITIVE_URL_PARAMS = /([?&])(token|key|secret|password|auth|access_token|api_key|session_id|csrf|xsrf)=[^&]*/gi;
+const SENSITIVE_URL_PARAMS = /([?&])(token|key|secret|password|auth|access_token|api_key|session_id|csrf|xsrf|xsec_token)=[^&]*/gi;
 
 export interface RedactionOptions {
   allowlist?: string[];

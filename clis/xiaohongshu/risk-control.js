@@ -1,4 +1,4 @@
-import { CliError } from '@jackwener/opencli/errors';
+import { CliError, CommandExecutionError, TimeoutError } from '@jackwener/opencli/errors';
 
 /**
  * Xiaohongshu risk-control pacing shared by the note / comments / download
@@ -29,6 +29,47 @@ export function isSecurityBlock(data) {
     return Boolean(data && typeof data === 'object' && !Array.isArray(data) && data.securityBlock);
 }
 
+function deadlineTimeout() {
+    return new TimeoutError(
+        'xiaohongshu note detail deadline',
+        50,
+        'The note was skipped before another browser action could exceed the batch deadline.',
+    );
+}
+
+function remainingDeadlineMs(deadlineAt) {
+    return deadlineAt === undefined ? Number.POSITIVE_INFINITY : deadlineAt - Date.now();
+}
+
+function deadlinePage(page, deadlineAt) {
+    if (deadlineAt === undefined)
+        return page;
+    const remainingMs = remainingDeadlineMs(deadlineAt);
+    if (remainingMs <= 0)
+        throw deadlineTimeout();
+    if (typeof page.withCommandTimeout !== 'function') {
+        throw new CommandExecutionError('Deadline-bound Xiaohongshu note reads require local browser command timeouts.');
+    }
+    return page.withCommandTimeout(Math.min(10, remainingMs / 1000));
+}
+
+async function runDeadlineBrowserAction(page, deadlineAt, action) {
+    try {
+        return await action(deadlinePage(page, deadlineAt));
+    }
+    catch (error) {
+        if (deadlineAt !== undefined && remainingDeadlineMs(deadlineAt) <= 0)
+            throw deadlineTimeout();
+        throw error;
+    }
+}
+
+async function waitWithinDeadline(page, seconds, deadlineAt) {
+    if (deadlineAt !== undefined && remainingDeadlineMs(deadlineAt) < seconds * 1000)
+        throw deadlineTimeout();
+    await page.wait({ time: seconds });
+}
+
 /**
  * Navigate to a XHS detail page and run `extractJs`, retrying once through a long
  * randomized cooldown when risk control soft-blocks the page. Returns the extract
@@ -47,6 +88,7 @@ export function isSecurityBlock(data) {
  * @param {number} [opts.cooldownMinS] Min cooldown before the retry (seconds).
  * @param {number} [opts.cooldownMaxS] Max cooldown before the retry (seconds).
  * @param {() => number} [opts.rand]   Injectable RNG for deterministic tests.
+ * @param {number} [opts.deadlineAt]    Private absolute deadline for bounded batch reads.
  */
 export async function readXhsDetailPage(page, {
     url,
@@ -58,11 +100,12 @@ export async function readXhsDetailPage(page, {
     cooldownMinS = 8,
     cooldownMaxS = 18,
     rand = Math.random,
+    deadlineAt,
 } = {}) {
     const readOnce = async () => {
-        await page.goto(url);
-        await page.wait({ time: jitterSeconds(settleMinS, settleMaxS, rand) });
-        return page.evaluate(extractJs);
+        await runDeadlineBrowserAction(page, deadlineAt, (boundedPage) => boundedPage.goto(url));
+        await waitWithinDeadline(page, jitterSeconds(settleMinS, settleMaxS, rand), deadlineAt);
+        return runDeadlineBrowserAction(page, deadlineAt, (boundedPage) => boundedPage.evaluate(extractJs));
     };
 
     let data = await readOnce();
@@ -71,7 +114,7 @@ export async function readXhsDetailPage(page, {
     // so the one-cooldown-reload cap is enforced structurally, not by a caller's
     // choice of retry count.
     if (retryOnBlock && isSecurityBlock(data)) {
-        await page.wait({ time: jitterSeconds(cooldownMinS, cooldownMaxS, rand) });
+        await waitWithinDeadline(page, jitterSeconds(cooldownMinS, cooldownMaxS, rand), deadlineAt);
         data = await readOnce();
     }
 

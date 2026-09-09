@@ -21,6 +21,11 @@ describe('observation redaction', () => {
       .toBe('https://x.test/api?token=[REDACTED]&ok=1&password=[REDACTED]');
   });
 
+  it('redacts Xiaohongshu signed URL tokens', () => {
+    expect(redactUrl('https://www.xiaohongshu.com/explore/abc?xsec_token=private-value&xsec_source=pc_search'))
+      .toBe('https://www.xiaohongshu.com/explore/abc?xsec_token=[REDACTED]&xsec_source=pc_search');
+  });
+
   it('redacts password and token fields recursively', () => {
     expect(redactValue({
       user: 'alice',
