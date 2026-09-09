@@ -39,6 +39,12 @@ describe('observation artifact', () => {
       responseBody: { ok: false },
     });
     session.record({ stream: 'console', level: 'error', text: 'boom password=supersecret' });
+    session.record({
+      stream: 'network',
+      url: 'https://www.xiaohongshu.com/explore/abc?xsec_token=private-xhs-token&xsec_source=pc_search',
+      method: 'GET',
+      status: 403,
+    });
 
     const result = exportObservationSession(session, { baseDir, error: new Error('failed') });
     expect(result.dir).toBe(getTraceDirectory('work', 'trace-1', baseDir));
@@ -52,6 +58,7 @@ describe('observation artifact', () => {
     expect(trace).toContain('token=[REDACTED]');
     expect(trace).toContain('"authorization":"[REDACTED]"');
     expect(trace).not.toContain('supersecret');
+    expect(trace).not.toContain('private-xhs-token');
 
     const summary = fs.readFileSync(result.summaryPath, 'utf-8');
     expect(summary).toContain('schemaVersion: 1');
@@ -63,7 +70,9 @@ describe('observation artifact', () => {
     expect(summary).toContain('adapterSourcePathExists: false');
     expect(summary).toContain('## Failed Network');
     expect(summary).toContain('500 GET https://api.test/data?token=[REDACTED]');
-    expect(summary).toContain('network: 1');
+    expect(summary).toContain('xsec_token=[REDACTED]');
+    expect(summary).not.toContain('private-xhs-token');
+    expect(summary).toContain('network: 2');
 
     const receipt = JSON.parse(fs.readFileSync(result.receiptPath, 'utf-8'));
     expect(receipt).toMatchObject({

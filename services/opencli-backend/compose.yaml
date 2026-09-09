@@ -57,6 +57,7 @@ services:
       TZ: ${TZ:-America/Los_Angeles}
       OPENCLI_API_TOKEN_FILE: /run/secrets/api_token
       OPENCLI_AGENT_TOKENS_FILE: /run/secrets/agent_tokens
+      OPENCLI_XHS_REF_DIR: /run/opencli-xhs-refs
       OPENCLI_ALLOWED_COMMANDS: ${OPENCLI_ALLOWED_COMMANDS:-hackernews.top,bilibili.hot,xiaohongshu.whoami,twitter.whoami}
       OPENCLI_AUTO_ALLOW_READS: ${OPENCLI_AUTO_ALLOW_READS:-true}
       OPENCLI_DENIED_ARGUMENTS: ${OPENCLI_DENIED_ARGUMENTS:-include-sensitive,token,password,secret,cookie}
@@ -73,6 +74,8 @@ services:
     volumes:
       - "${OPENCLI_RUNTIME_ROOT:?set OPENCLI_RUNTIME_ROOT to the persistent backend directory}/data:/data"
       - "${OPENCLI_RUNTIME_ROOT:?set OPENCLI_RUNTIME_ROOT to the persistent backend directory}/opencli-state:/home/node/.opencli"
+    tmpfs:
+      - /run/opencli-xhs-refs:rw,noexec,nosuid,nodev,size=1m,mode=0700,uid=1000,gid=1000
     secrets:
       - api_token
       - agent_tokens

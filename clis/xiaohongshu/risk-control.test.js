@@ -6,12 +6,14 @@ const { jitterSeconds, isSecurityBlock, readXhsDetailPage } = __test__;
 
 function makePage(evaluateResults) {
     let i = 0;
-    return {
+    const page = {
         goto: vi.fn().mockResolvedValue(undefined),
         wait: vi.fn().mockResolvedValue(undefined),
         evaluate: vi.fn().mockImplementation(() =>
             Promise.resolve(evaluateResults[Math.min(i++, evaluateResults.length - 1)])),
+        withCommandTimeout: vi.fn(() => page),
     };
+    return page;
 }
 
 describe('xiaohongshu risk-control jitterSeconds', () => {
@@ -105,5 +107,44 @@ describe('xiaohongshu risk-control readXhsDetailPage', () => {
         const page = makePage([{ securityBlock: true }, { securityBlock: true }]);
         await expect(readXhsDetailPage(page, { url, extractJs, rand: () => 0.5 }))
             .rejects.toBeInstanceOf(CliError);
+    });
+
+    it('bounds each browser action by the remaining private deadline', async () => {
+        const page = makePage([{ title: 'ok', securityBlock: false }]);
+        await readXhsDetailPage(page, {
+            url,
+            extractJs,
+            deadlineAt: Date.now() + 30_000,
+            rand: () => 0,
+        });
+        expect(page.withCommandTimeout).toHaveBeenCalledTimes(2);
+        expect(page.withCommandTimeout).toHaveBeenNthCalledWith(1, 10);
+        expect(page.withCommandTimeout).toHaveBeenNthCalledWith(2, 10);
+    });
+
+    it('does not begin a settle wait that cannot fit before the deadline', async () => {
+        const page = makePage([{ title: 'never extracted', securityBlock: false }]);
+        await expect(readXhsDetailPage(page, {
+            url,
+            extractJs,
+            deadlineAt: Date.now() + 1_000,
+            rand: () => 0,
+        })).rejects.toMatchObject({ code: 'TIMEOUT' });
+        expect(page.goto).toHaveBeenCalledTimes(1);
+        expect(page.wait).not.toHaveBeenCalled();
+        expect(page.evaluate).not.toHaveBeenCalled();
+    });
+
+    it('does not begin a risk-control cooldown that cannot fit before the deadline', async () => {
+        const page = makePage([{ securityBlock: true }, { title: 'never retried', securityBlock: false }]);
+        await expect(readXhsDetailPage(page, {
+            url,
+            extractJs,
+            deadlineAt: Date.now() + 5_000,
+            rand: () => 0,
+        })).rejects.toMatchObject({ code: 'TIMEOUT' });
+        expect(page.goto).toHaveBeenCalledTimes(1);
+        expect(page.evaluate).toHaveBeenCalledTimes(1);
+        expect(page.wait).toHaveBeenCalledTimes(1);
     });
 });

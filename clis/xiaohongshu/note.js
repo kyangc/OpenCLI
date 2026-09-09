@@ -74,7 +74,11 @@ export const command = cli({
         { name: 'note-id', required: true, positional: true, help: 'Full Xiaohongshu note URL with xsec_token' },
     ],
     columns: ['field', 'value'],
-    func: async (page, kwargs) => {
+    func: async (page, kwargs, internalOptions) => {
+        const includePageUrl = Boolean(internalOptions && typeof internalOptions === 'object' && internalOptions.includePageUrl === true);
+        const deadlineAt = internalOptions && typeof internalOptions === 'object' && Number.isFinite(internalOptions.deadlineAt)
+            ? internalOptions.deadlineAt
+            : undefined;
         const raw = String(kwargs['note-id']);
         const noteId = parseNoteId(raw);
         const url = buildNoteUrl(raw, { commandName: 'xiaohongshu note' });
@@ -87,6 +91,7 @@ export const command = cli({
             securityHelp: /^https?:\/\//.test(raw)
                 ? 'The page may be temporarily restricted. Try again later or from a different session.'
                 : 'Try using a full URL from search results (with xsec_token) instead of a bare note ID.',
+            deadlineAt,
         });
         if (!data || typeof data !== 'object') {
             throw new EmptyResultError('xiaohongshu/note', 'Unexpected evaluate response');
@@ -114,6 +119,9 @@ export const command = cli({
             { field: 'collects', value: numOrZero(d.collects || '') },
             { field: 'comments', value: numOrZero(d.comments || '') },
         ];
+        if (includePageUrl) {
+            rows.push({ field: 'page_url', value: typeof d.pageUrl === 'string' ? d.pageUrl : '' });
+        }
         if (d.tags?.length) {
             rows.push({ field: 'tags', value: d.tags.join(', ') });
         }

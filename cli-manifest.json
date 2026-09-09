@@ -45859,6 +45859,45 @@
   },
   {
     "site": "xiaohongshu",
+    "name": "discover",
+    "description": "搜索小红书笔记并返回短期不透明引用",
+    "access": "read",
+    "domain": "www.xiaohongshu.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "query",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Search keyword"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 12,
+        "required": false,
+        "help": "Number of notes (1-20)"
+      }
+    ],
+    "columns": [
+      "rank",
+      "note_ref",
+      "title",
+      "author",
+      "canonical_url",
+      "published_at",
+      "likes"
+    ],
+    "type": "js",
+    "modulePath": "xiaohongshu/discover.js",
+    "sourceFile": "xiaohongshu/discover.js",
+    "navigateBefore": false,
+    "siteSession": "ephemeral"
+  },
+  {
+    "site": "xiaohongshu",
     "name": "download",
     "description": "下载小红书笔记中的图片和视频",
     "access": "read",
@@ -46287,6 +46326,38 @@
     "modulePath": "xiaohongshu/publish.js",
     "sourceFile": "xiaohongshu/publish.js",
     "navigateBefore": false
+  },
+  {
+    "site": "xiaohongshu",
+    "name": "read-notes",
+    "description": "按短期不透明引用顺序读取最多三篇小红书笔记",
+    "access": "read",
+    "domain": "www.xiaohongshu.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "note-refs",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Comma-separated opaque refs (1-3)"
+      }
+    ],
+    "columns": [
+      "note_ref",
+      "title",
+      "author",
+      "canonical_url",
+      "content",
+      "content_truncated",
+      "capture_status"
+    ],
+    "type": "js",
+    "modulePath": "xiaohongshu/read-notes.js",
+    "sourceFile": "xiaohongshu/read-notes.js",
+    "navigateBefore": false,
+    "siteSession": "ephemeral"
   },
   {
     "site": "xiaohongshu",
