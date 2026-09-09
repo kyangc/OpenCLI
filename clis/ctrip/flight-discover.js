@@ -48,11 +48,6 @@ function buildFlightDiscoveryExtractJs(requestedScope, limit) {
         return rect.width > 0 && rect.height > 0
           && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
       };
-      while (![...document.querySelectorAll('.flight-item')].some(visible)) {
-        if (hasCaptcha()) return resolve({ captcha: true });
-        if (performance.now() >= readinessDeadline) return resolve({ initial_timeout: true });
-        await sleep(Math.min(250, readinessDeadline - performance.now()));
-      }
       const visibleText = (selector, root = document) => {
         const element = root.querySelector(selector);
         return visible(element) ? clean(element.textContent) : null;
@@ -95,12 +90,30 @@ function buildFlightDiscoveryExtractJs(requestedScope, limit) {
         && scope.departure_date === requested.departure_date && scope.trip_type === 'one_way'
         && scope.adults === 1 && scope.children === 0 && scope.infants === 0
         && Boolean(scope.cabin_filter_label) && scope.time_basis === 'page_displayed_local_time';
+      let observedScope;
+      while (true) {
+        if (hasCaptcha()) return resolve({ captcha: true });
+        const hasVisibleCard = [...document.querySelectorAll('.flight-item')].some(visible);
+        const currentScope = readScope(true);
+        if (performance.now() >= readinessDeadline) {
+          if (!hasVisibleCard) return resolve({ initial_timeout: true });
+          return resolve({
+            scope_valid: false,
+            scope_readiness_failure: true,
+            observed_scope: currentScope,
+            items: [],
+          });
+        }
+        if (hasVisibleCard && scopeMatches(currentScope)) {
+          observedScope = currentScope;
+          break;
+        }
+        await sleep(Math.min(250, readinessDeadline - performance.now()));
+      }
       const sameScope = (left, right) => left.origin === right.origin && left.destination === right.destination
         && left.departure_date === right.departure_date && left.trip_type === right.trip_type
         && left.adults === right.adults && left.children === right.children && left.infants === right.infants
         && left.cabin_filter_label === right.cabin_filter_label && left.time_basis === right.time_basis;
-      const observedScope = readScope(true);
-      const scopeValid = scopeMatches(observedScope);
 
       const countText = visibleText('.recommend-box.header .total');
       const totalMatch = countText?.match(/共\\s*(\\d+)\\s*个航班/);
@@ -228,14 +241,6 @@ function buildFlightDiscoveryExtractJs(requestedScope, limit) {
           displayed_price: displayedPriceOf(card),
         };
       };
-      if (!scopeValid) return resolve({
-        scope_valid: false,
-        observed_scope: observedScope,
-        page_reported_counts: pageReportedCounts,
-        sort_label: sortLabel,
-        items: [],
-      });
-
       const observations = new Map();
       let identityConflict = false;
       const scanVisibleCards = () => {
@@ -324,7 +329,7 @@ function buildFlightDiscoveryExtractJs(requestedScope, limit) {
 
       const items = [...observations.values()].map(({ item }) => item).slice(0, limit);
       return resolve({
-        scope_valid: scopeValid,
+        scope_valid: true,
         observed_scope: observedScope,
         page_reported_counts: pageReportedCounts,
         sort_label: sortLabel,

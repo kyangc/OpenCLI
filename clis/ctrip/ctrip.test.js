@@ -1498,7 +1498,7 @@ describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
 
     function startBoundedExtract({
         cards = boundedCard({ id: 'flight-a' }), limit = 2,
-        url = 'https://flights.ctrip.com/online/list/oneway-pek-sha', onScroll, now,
+        url = 'https://flights.ctrip.com/online/list/oneway-pek-sha', onScroll, now, beforeEvaluate,
     } = {}) {
         const dom = new JSDOM(`<!doctype html><html><body>
           <form id="searchForm">
@@ -1532,6 +1532,7 @@ describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
             const left = Number(card?.dataset.left || 0);
             return { x: left, y: top, top, bottom: top + 60, left, right: left + 600, width: 600, height: 60, toJSON() {} };
         };
+        beforeEvaluate?.(dom);
         const requestedScope = { origin: 'PEK', destination: 'SHA', departure_date: '2026-06-15' };
         const js = flightDiscoverTest.buildFlightDiscoveryExtractJs(requestedScope, limit);
         const promise = Function(
@@ -1563,6 +1564,81 @@ describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
         await expect(promise).resolves.toMatchObject({
             items: [{ flight_number: 'TT1001' }],
             collection: { stop_reason: 'limit', scroll_count: 0 },
+        });
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('waits for the visible search scope to hydrate after a flight card appears', async () => {
+        vi.useFakeTimers();
+        const { dom, promise } = startBoundedExtract({
+            cards: boundedCard({ id: 'flight-a' }),
+            limit: 1,
+            beforeEvaluate: (currentDom) => {
+                currentDom.window.document.querySelector('input[name="owDCity"]').value = '';
+                currentDom.window.document.querySelector('input[name="owACity"]').value = '';
+            },
+        });
+        let result;
+        void promise.then((value) => { result = value; });
+
+        await vi.advanceTimersByTimeAsync(12_000);
+        expect(result).toBeUndefined();
+        dom.window.document.querySelector('input[name="owDCity"]').value = '北京(北京大兴国际机场)(PEK)';
+        dom.window.document.querySelector('input[name="owACity"]').value = '上海(上海浦东国际机场)(SHA)';
+        await vi.advanceTimersByTimeAsync(250);
+
+        await expect(promise).resolves.toMatchObject({
+            scope_valid: true,
+            observed_scope: { origin: 'PEK', destination: 'SHA' },
+            items: [{ flight_number: 'TT1001' }],
+        });
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('waits until the fixed readiness deadline before failing a persistently wrong visible scope', async () => {
+        vi.useFakeTimers();
+        const { promise } = startBoundedExtract({
+            cards: boundedCard({ id: 'flight-a' }),
+            limit: 1,
+            beforeEvaluate: (dom) => {
+                dom.window.document.querySelector('input[name="owDCity"]').value = '广州(白云国际机场)(CAN)';
+            },
+        });
+        let result;
+        void promise.then((value) => { result = value; });
+
+        await vi.advanceTimersByTimeAsync(19_750);
+        expect(result).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(250);
+
+        await expect(promise).resolves.toMatchObject({
+            scope_valid: false,
+            scope_readiness_failure: true,
+            observed_scope: { origin: 'CAN' },
+        });
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('rejects scope that hydrates only after the fixed readiness deadline', async () => {
+        vi.useFakeTimers();
+        let elapsed = 0;
+        const { dom, promise } = startBoundedExtract({
+            cards: boundedCard({ id: 'flight-a' }),
+            limit: 1,
+            now: () => elapsed,
+            beforeEvaluate: (currentDom) => {
+                currentDom.window.document.querySelector('input[name="owDCity"]').value = '';
+            },
+        });
+
+        dom.window.document.querySelector('input[name="owDCity"]').value = '北京(北京大兴国际机场)(PEK)';
+        elapsed = 21_000;
+        await vi.advanceTimersByTimeAsync(250);
+
+        await expect(promise).resolves.toMatchObject({
+            scope_valid: false,
+            scope_readiness_failure: true,
+            observed_scope: { origin: 'PEK' },
         });
         expect(vi.getTimerCount()).toBe(0);
     });
@@ -1927,7 +2003,12 @@ describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
     });
 
     it('marks the extraction invalid when the visible search scope drifts', async () => {
-        expect((await runExtract({ origin: 'PEK', destination: 'CTS', departure_date: '2026-10-02' })).scope_valid).toBe(false);
+        vi.useFakeTimers();
+        const extraction = runExtract({ origin: 'PEK', destination: 'CTS', departure_date: '2026-10-02' });
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect((await extraction).scope_valid).toBe(false);
+        expect(vi.getTimerCount()).toBe(0);
     });
 
     it('skips cards with invalid clock values or no credible airport anchors', async () => {
