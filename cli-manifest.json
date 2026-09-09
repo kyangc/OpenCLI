@@ -9162,7 +9162,7 @@
   {
     "site": "ctrip",
     "name": "flight-discover",
-    "description": "返回携程单程页重置到顶部后的首屏可见航班候选（不向下滚动加载更多，不含报价）",
+    "description": "返回携程单程页重置到顶部后的首屏可见航班候选（不向下滚动加载更多；可含展示起价，但不是报价或库存）",
     "access": "read",
     "domain": "flights.ctrip.com",
     "strategy": "cookie",

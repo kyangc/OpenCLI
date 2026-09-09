@@ -165,6 +165,51 @@ function buildFlightDiscoveryExtractJs(requestedScope, limit) {
         }
         return null;
       };
+      const hasLineThrough = (element, boundary) => {
+        let current = element;
+        while (current) {
+          const style = getComputedStyle(current);
+          if (String(style.textDecorationLine || '').includes('line-through') ||
+              String(style.textDecoration || '').includes('line-through')) return true;
+          if (current === boundary) return false;
+          current = current.parentElement;
+        }
+        return true;
+      };
+      const currentTextOf = (element) => {
+        const chunks = [];
+        const walker = element.ownerDocument.createTreeWalker(element, 4);
+        let node;
+        while ((node = walker.nextNode())) {
+          if (!visible(node.parentElement) || hasLineThrough(node.parentElement, element)) continue;
+          chunks.push(node.nodeValue);
+        }
+        return clean(chunks.join(''));
+      };
+      const displayedPriceOf = (card) => {
+        const regions = [...card.querySelectorAll('.flight-price')]
+          .filter((region) => visible(region) && !hasLineThrough(region, card));
+        if (regions.length !== 1) return null;
+        const region = regions[0];
+        const current = (selector) => [...region.querySelectorAll(selector)]
+          .filter((element) => visible(element) && !hasLineThrough(element, region));
+        const prices = current('.price');
+        const qualifiers = current('.qi');
+        const taxes = current('.tip');
+        if (prices.length !== 1 || qualifiers.length !== 1 || taxes.length !== 1) return null;
+        const [price] = prices;
+        const [qualifier] = qualifiers;
+        const [tax] = taxes;
+        const amount = currentTextOf(price).match(/^¥\\s*([1-9]\\d{0,8}(?:\\.\\d{1,2})?)$/)?.[1];
+        if (!amount || currentTextOf(qualifier) !== '起' || currentTextOf(tax) !== '含税价') return null;
+        return {
+          amount,
+          currency_symbol: '¥',
+          qualifier: 'starting',
+          tax_inclusion: 'included',
+          passenger_basis: 'unknown',
+        };
+      };
       const items = [];
       for (const card of document.querySelectorAll('.flight-item')) {
         if (items.length >= limit) break;
@@ -193,6 +238,7 @@ function buildFlightDiscoveryExtractJs(requestedScope, limit) {
           overnight: dayOffset > 0,
           connection_type: transferText ? 'connecting' : directText ? 'direct' : null,
           duration,
+          displayed_price: displayedPriceOf(card),
         });
       }
       return {
@@ -222,6 +268,23 @@ function isCredibleAirport(value) {
     return typeof value === 'string' && /机场$/.test(value.trim());
 }
 
+function normalizeDisplayedPrice(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const amount = typeof value.amount === 'string' ? value.amount.trim() : '';
+    if (!/^[1-9]\d{0,8}(?:\.\d{1,2})?$/.test(amount) ||
+        value.currency_symbol !== '¥' || value.qualifier !== 'starting' ||
+        value.tax_inclusion !== 'included' || value.passenger_basis !== 'unknown') {
+        return null;
+    }
+    return {
+        amount,
+        currency_symbol: '¥',
+        qualifier: 'starting',
+        tax_inclusion: 'included',
+        passenger_basis: 'unknown',
+    };
+}
+
 function normalizeDiscoveryItem(item) {
     const airline = cleanString(item?.airline);
     const departureDatetime = cleanString(item?.departure_datetime);
@@ -249,6 +312,7 @@ function normalizeDiscoveryItem(item) {
         overnight: item.overnight,
         connection_type: connectionType,
         duration: cleanString(item?.duration),
+        displayed_price: normalizeDisplayedPrice(item?.displayed_price),
     };
 }
 
@@ -256,7 +320,7 @@ cli({
     site: 'ctrip',
     name: 'flight-discover',
     access: 'read',
-    description: '返回携程单程页重置到顶部后的首屏可见航班候选（不向下滚动加载更多，不含报价）',
+    description: '返回携程单程页重置到顶部后的首屏可见航班候选（不向下滚动加载更多；可含展示起价，但不是报价或库存）',
     domain: 'flights.ctrip.com',
     strategy: Strategy.COOKIE,
     browser: true,
