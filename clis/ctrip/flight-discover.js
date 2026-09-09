@@ -176,11 +176,12 @@ function buildFlightDiscoveryExtractJs(requestedScope, limit) {
         }
         return true;
       };
-      const currentTextOf = (element) => {
+      const currentTextOf = (element, excluded = null) => {
         const chunks = [];
         const walker = element.ownerDocument.createTreeWalker(element, 4);
         let node;
         while ((node = walker.nextNode())) {
+          if (excluded?.contains(node.parentElement)) continue;
           if (!visible(node.parentElement) || hasLineThrough(node.parentElement, element)) continue;
           chunks.push(node.nodeValue);
         }
@@ -193,13 +194,20 @@ function buildFlightDiscoveryExtractJs(requestedScope, limit) {
         const region = regions[0];
         const current = (selector) => [...region.querySelectorAll(selector)]
           .filter((element) => visible(element) && !hasLineThrough(element, region));
-        const prices = current('.price');
+        const currentPrices = current('.price');
+        const prices = currentPrices.filter((candidate) =>
+          !currentPrices.some((other) => other !== candidate && candidate.contains(other)));
         const qualifiers = current('.qi');
         const taxes = current('.tip');
         if (prices.length !== 1 || qualifiers.length !== 1 || taxes.length !== 1) return null;
         const [price] = prices;
         const [qualifier] = qualifiers;
         const [tax] = taxes;
+        const extraPriceText = currentPrices
+          .filter((candidate) => candidate !== price)
+          .map((candidate) => currentTextOf(candidate, price))
+          .join('');
+        if (/¥\\s*[1-9]\\d{0,8}(?:\\.\\d{1,2})?/.test(extraPriceText)) return null;
         const amount = currentTextOf(price).match(/^¥\\s*([1-9]\\d{0,8}(?:\\.\\d{1,2})?)$/)?.[1];
         if (!amount || currentTextOf(qualifier) !== '起' || currentTextOf(tax) !== '含税价') return null;
         return {
