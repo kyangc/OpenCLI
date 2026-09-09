@@ -1567,6 +1567,58 @@ describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
         expect(item.displayed_price.amount).not.toBe('599');
     });
 
+    it('accepts the unique leaf price inside the real nested Ctrip price wrapper', () => {
+        const card = `<div class="flight-item" data-top="40">
+          真实结构航空 RS5053 09:00 浦东国际机场 12:00 新千岁机场 3小时
+          <div class="flight-price">
+            <div class="price over-size"><div>
+              <span class="price"><dfn>¥</dfn>5053</span><span class="qi">起</span>
+            </div></div>
+            <div class="tip">含税价</div>
+          </div>
+        </div>`;
+        const result = runExtract(undefined, card);
+        const item = result.items.find((candidate) => candidate.airline === '真实结构航空');
+
+        expect(item.displayed_price).toMatchObject({ amount: '5053' });
+    });
+
+    it('ignores hidden or struck leaf copies when one current leaf price remains', () => {
+        const card = `<div class="flight-item" data-top="40">
+          副本结构航空 CP5053 09:00 浦东国际机场 12:00 新千岁机场 3小时
+          <div class="flight-price">
+            <div class="price over-size"><div>
+              <span class="price"><dfn>¥</dfn>5053</span>
+              <span class="price" style="display:none">¥6060</span>
+              <span class="price" style="text-decoration:line-through">¥4040</span>
+              <span class="qi">起</span>
+            </div></div>
+            <div class="tip">含税价</div>
+          </div>
+        </div>`;
+        const result = runExtract(undefined, card);
+        const item = result.items.find((candidate) => candidate.airline === '副本结构航空');
+
+        expect(item.displayed_price).toMatchObject({ amount: '5053' });
+    });
+
+    it('rejects a parent price wrapper that carries another visible current amount', () => {
+        const card = `<div class="flight-item" data-top="40">
+          父级冲突航空 PC5053 09:00 浦东国际机场 12:00 新千岁机场 3小时
+          <div class="flight-price">
+            <div class="price over-size">¥777<div>
+              <span class="price"><dfn>¥</dfn>5053</span><span class="qi">起</span>
+            </div></div>
+            <div class="tip">含税价</div>
+          </div>
+        </div>`;
+        const result = runExtract(undefined, card);
+        const item = result.items.find((candidate) => candidate.airline === '父级冲突航空');
+
+        expect(item).toBeDefined();
+        expect(item.displayed_price).toBeNull();
+    });
+
     it('marks the extraction invalid when the visible search scope drifts', () => {
         expect(runExtract({ origin: 'PEK', destination: 'CTS', departure_date: '2026-10-02' }).scope_valid).toBe(false);
     });
