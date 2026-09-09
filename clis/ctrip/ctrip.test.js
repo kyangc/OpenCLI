@@ -1173,6 +1173,35 @@ describe('ctrip flight command (registry-level)', () => {
 describe('ctrip flight-discover command (registry-level)', () => {
     const cmd = getRegistry().get('ctrip/flight-discover');
 
+    function discoveryRaw(overrides = {}) {
+        const items = overrides.items ?? [{
+            airline: '厦门航空', flight_number: 'MF8561',
+            departure_datetime: '2026-06-15 07:50', departure_airport: '北京大兴国际机场',
+            arrival_datetime: '2026-06-15 09:45', arrival_airport: '上海浦东国际机场',
+            overnight: false, connection_type: 'direct', duration: '1时55分', displayed_price: null,
+        }];
+        const requestedLimit = overrides.requestedLimit ?? 5;
+        return {
+            scope_valid: true,
+            observed_scope: {
+                origin: 'PEK', destination: 'SHA', departure_date: '2026-06-15',
+                trip_type: 'one_way', adults: 1, children: 0, infants: 0,
+                cabin_filter_label: '经济舱', time_basis: 'page_displayed_local_time',
+            },
+            page_reported_counts: null,
+            sort_label: null,
+            items,
+            collection: {
+                requested_limit: requestedLimit,
+                returned_count: items.length,
+                scroll_count: 3,
+                stop_reason: 'plateau',
+                duration_ms: 3000,
+            },
+            ...overrides,
+        };
+    }
+
     it('registers an independent bounded JSON discovery command', () => {
         expect(cmd).toMatchObject({
             access: 'read',
@@ -1183,10 +1212,70 @@ describe('ctrip flight-discover command (registry-level)', () => {
         });
         expect(cmd.columns).toBeUndefined();
         expect(cmd.args.map((arg) => arg.name)).toEqual(['from', 'to', 'date', 'limit']);
+        expect(cmd.description).toContain('有界滚动中实际可见');
         expect(cmd.description).toContain('可含展示起价，但不是报价或库存');
     });
 
-    it('returns a scope-verified first-screen envelope without quote or ranking fields', async () => {
+    it('returns deduplicated initial and scrolled observations after one navigation and one page collection', async () => {
+        const observedScope = {
+            origin: 'PEK', destination: 'SHA', departure_date: '2026-06-15',
+            trip_type: 'one_way', adults: 1, children: 0, infants: 0,
+            cabin_filter_label: '经济舱', time_basis: 'page_displayed_local_time',
+        };
+        const item = (flightNumber, departureTime, amount) => ({
+            airline: '测试航空', flight_number: flightNumber,
+            departure_datetime: `2026-06-15 ${departureTime}`, departure_airport: '北京大兴国际机场',
+            arrival_datetime: '2026-06-15 12:00', arrival_airport: '上海浦东国际机场',
+            overnight: false, connection_type: 'direct', duration: '2小时',
+            displayed_price: {
+                amount, currency_symbol: '¥', qualifier: 'starting',
+                tax_inclusion: 'included', passenger_basis: 'unknown',
+            },
+        });
+        const page = createPageMock([{
+            scope_valid: true,
+            observed_scope: observedScope,
+            page_reported_counts: { total_results: 32 },
+            sort_label: '推荐排序',
+            items: [item('TT1001', '08:00', '500'), item('TT1002', '09:00', '600')],
+            collection: {
+                requested_limit: 2, returned_count: 2, scroll_count: 1,
+                stop_reason: 'limit', duration_ms: 1250,
+            },
+        }]);
+
+        const result = await cmd.func(page, {
+            from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 2,
+        });
+
+        expect(result.coverage).toBe('observed_bounded_results');
+        expect(result.items.map((candidate) => candidate.flight_number)).toEqual(['TT1001', 'TT1002']);
+        expect(result.collection).toEqual({
+            requested_limit: 2, returned_count: 2, scroll_count: 1,
+            stop_reason: 'limit', duration_ms: 1250,
+        });
+        expect(page.goto).toHaveBeenCalledTimes(1);
+        expect(page.evaluate).toHaveBeenCalledTimes(1);
+    });
+
+    it('defaults to 20 candidates and accepts the bounded maximum of 40', async () => {
+        const defaultPage = createPageMock([discoveryRaw({ requestedLimit: 20 })]);
+        const maximumPage = createPageMock([discoveryRaw({ requestedLimit: 40 })]);
+
+        const defaultResult = await cmd.func(defaultPage, {
+            from: 'PEK', to: 'SHA', date: '2026-06-15',
+        });
+        const maximumResult = await cmd.func(maximumPage, {
+            from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 40,
+        });
+
+        expect(defaultResult.collection.requested_limit).toBe(20);
+        expect(maximumResult.collection.requested_limit).toBe(40);
+        expect(defaultPage.evaluate.mock.calls[0][0]).toContain('const limit = 20');
+        expect(maximumPage.evaluate.mock.calls[0][0]).toContain('const limit = 40');
+    });
+
+    it('returns a scope-verified bounded envelope without quote or ranking fields', async () => {
         const observedScope = {
             origin: 'PEK',
             destination: 'SHA',
@@ -1199,10 +1288,7 @@ describe('ctrip flight-discover command (registry-level)', () => {
             time_basis: 'page_displayed_local_time',
         };
         const rawObservedScope = { ...observedScope, cabin_filter_label: `全舱位\uE60C\uE604` };
-        const page = createPageMock([
-            true,
-            'content',
-            {
+        const page = createPageMock([{
                 scope_valid: true,
                 observed_scope: rawObservedScope,
                 page_reported_counts: { total_results: 32 },
@@ -1227,8 +1313,11 @@ describe('ctrip flight-discover command (registry-level)', () => {
                     inventory: '余票充足',
                     booking_cta: '订票',
                 }],
-            },
-        ]);
+                collection: {
+                    requested_limit: 5, returned_count: 1, scroll_count: 3,
+                    stop_reason: 'plateau', duration_ms: 3000,
+                },
+            }]);
 
         const result = await cmd.func(page, {
             from: 'pek', to: 'sha', date: '2026-06-15', limit: 5,
@@ -1240,7 +1329,11 @@ describe('ctrip flight-discover command (registry-level)', () => {
                 origin: 'PEK', destination: 'SHA', departure_date: '2026-06-15',
             },
             observed_scope: observedScope,
-            coverage: 'observed_initial_results',
+            coverage: 'observed_bounded_results',
+            collection: {
+                requested_limit: 5, returned_count: 1, scroll_count: 3,
+                stop_reason: 'plateau', duration_ms: 3000,
+            },
             page_reported_counts: { total_results: 32 },
             sort_label: '推荐排序',
             items: [{
@@ -1261,12 +1354,9 @@ describe('ctrip flight-discover command (registry-level)', () => {
         });
         expect(JSON.stringify(result)).not.toMatch(/"price"|"currency"|"raw"|rank|lowest|all_results|inventory|booking|余票|订票|[\uE000-\uF8FF]/i);
         expect(page.goto).toHaveBeenCalledTimes(1);
-        expect(page.evaluate).toHaveBeenCalledTimes(3);
-        expect(page.evaluate.mock.calls[0][0]).toBe(flightDiscoverTest.RESET_TO_TOP_JS);
-        expect(page.evaluate.mock.calls[1][0]).toBe(flightDiscoverTest.WAIT_FOR_DISCOVERY_JS);
-        expect(page.evaluate.mock.calls.filter(([script]) => script === flightDiscoverTest.RESET_TO_TOP_JS)).toHaveLength(1);
+        expect(page.evaluate).toHaveBeenCalledTimes(1);
+        expect(page.evaluate.mock.calls[0][0]).toContain('window.scrollTo(0, 0)');
         expect(page.goto.mock.invocationCallOrder[0]).toBeLessThan(page.evaluate.mock.invocationCallOrder[0]);
-        expect(page.evaluate.mock.invocationCallOrder[0]).toBeLessThan(page.evaluate.mock.invocationCallOrder[1]);
         expect(page.scroll).not.toHaveBeenCalled();
         expect(page.autoScroll).not.toHaveBeenCalled();
     });
@@ -1282,7 +1372,7 @@ describe('ctrip flight-discover command (registry-level)', () => {
             overnight: false, connection_type: 'direct', duration: '1时55分',
         };
         if (displayedPrice !== undefined) item.displayed_price = displayedPrice;
-        const page = createPageMock([true, 'content', {
+        const page = createPageMock([{
             scope_valid: true,
             observed_scope: {
                 origin: 'PEK', destination: 'SHA', departure_date: '2026-06-15',
@@ -1292,6 +1382,10 @@ describe('ctrip flight-discover command (registry-level)', () => {
             page_reported_counts: null,
             sort_label: null,
             items: [item],
+            collection: {
+                requested_limit: 5, returned_count: 1, scroll_count: 3,
+                stop_reason: 'plateau', duration_ms: 3000,
+            },
         }]);
 
         const result = await cmd.func(page, { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5 });
@@ -1304,23 +1398,20 @@ describe('ctrip flight-discover command (registry-level)', () => {
         const invalidPage = createPageMock([]);
         await expect(cmd.func(invalidPage, { from: 'PEK', to: 'PEK', date: '2026-06-15', limit: 5 }))
             .rejects.toMatchObject({ code: 'ARGUMENT' });
-        await expect(cmd.func(invalidPage, { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 6 }))
+        await expect(cmd.func(invalidPage, { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 41 }))
             .rejects.toMatchObject({ code: 'ARGUMENT' });
         expect(invalidPage.goto).not.toHaveBeenCalled();
 
-        await expect(cmd.func(createPageMock([true, 'captcha']), {
+        await expect(cmd.func(createPageMock([{ captcha: true }]), {
             from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5,
         })).rejects.toMatchObject({ code: 'AUTH_REQUIRED' });
-        await expect(cmd.func(createPageMock([true, 'content', { captcha: true }]), {
-            from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5,
-        })).rejects.toMatchObject({ code: 'AUTH_REQUIRED' });
-        await expect(cmd.func(createPageMock([true, 'timeout']), {
+        await expect(cmd.func(createPageMock([{ initial_timeout: true }]), {
             from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5,
         })).rejects.toMatchObject({
             code: 'TIMEOUT',
-            message: 'Ctrip visible first-screen flight wait timed out after 20s',
+            message: 'Ctrip visible initial flight wait timed out after 20s',
         });
-        await expect(cmd.func(createPageMock([true, 'content', {
+        await expect(cmd.func(createPageMock([{
             scope_valid: false,
             observed_scope: { origin: 'CAN' },
             items: [{ airline: '不应返回' }],
@@ -1330,10 +1421,38 @@ describe('ctrip flight-discover command (registry-level)', () => {
             code: 'COMMAND_EXEC',
             message: 'Ctrip flight-discover visible search scope was missing or did not match the request',
         });
+
+        await expect(cmd.func(createPageMock([discoveryRaw({ items: [] })]), {
+            from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5,
+        })).rejects.toMatchObject({ code: 'COMMAND_EXEC' });
+        await expect(cmd.func(createPageMock([{ identity_conflict: true }]), {
+            from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5,
+        })).rejects.toMatchObject({ code: 'COMMAND_EXEC' });
+        await expect(cmd.func(createPageMock([{ extraction_error: true }]), {
+            from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5,
+        })).rejects.toMatchObject({
+            code: 'COMMAND_EXEC',
+            message: 'Ctrip flight-discover visible flight-card extraction returned invalid output',
+        });
+    });
+
+    it('accepts a true integer elapsed duration within the scheduling-tolerance bound', async () => {
+        const page = createPageMock([discoveryRaw({
+            collection: {
+                requested_limit: 5, returned_count: 1, scroll_count: 1,
+                stop_reason: 'time_budget', duration_ms: 50_000,
+            },
+        })]);
+
+        const result = await cmd.func(page, {
+            from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5,
+        });
+
+        expect(result.collection.duration_ms).toBe(50_000);
     });
 
     it('rejects malformed times and non-airport tokens returned by the page extractor', async () => {
-        const page = createPageMock([true, 'content', {
+        const page = createPageMock([{
             scope_valid: true,
             observed_scope: {
                 origin: 'PEK', destination: 'SHA', departure_date: '2026-06-15',
@@ -1348,6 +1467,10 @@ describe('ctrip flight-discover command (registry-level)', () => {
                 arrival_datetime: '2026-06-15 99:99', arrival_airport: '订票',
                 overnight: false, connection_type: null, duration: '1小时',
             }],
+            collection: {
+                requested_limit: 5, returned_count: 1, scroll_count: 3,
+                stop_reason: 'plateau', duration_ms: 3000,
+            },
         }]);
         await expect(cmd.func(page, { from: 'PEK', to: 'SHA', date: '2026-06-15', limit: 5 }))
             .rejects.toMatchObject({
@@ -1357,90 +1480,270 @@ describe('ctrip flight-discover command (registry-level)', () => {
     });
 });
 
-describe('ctrip flight-discover readiness wait (JSDOM)', () => {
+describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
     afterEach(() => {
         vi.useRealTimers();
     });
 
-    function startWait(html = '', url = 'https://flights.ctrip.com/online/list/oneway-pek-sha') {
-        const dom = new JSDOM(`<!doctype html><html><body>${html}</body></html>`,
-            { url });
+    function boundedCard({
+        id, airline = '测试航空', flight = 'TT1001', departure = '08:00', arrival = '10:00',
+        departureAirport = '北京大兴国际机场', arrivalAirport = '上海浦东国际机场',
+        amount = '500', top = 100, style = '',
+    }) {
+        return `<div class="flight-item" data-testid="${id}" data-top="${top}" style="${style}">
+          ${airline} ${flight} ${departure} ${departureAirport} ${arrival} ${arrivalAirport} 2小时 直飞
+          <div class="flight-price"><span class="price">¥${amount}</span><span class="qi">起</span><span class="tip">含税价</span></div>
+        </div>`;
+    }
+
+    function startBoundedExtract({
+        cards = boundedCard({ id: 'flight-a' }), limit = 2,
+        url = 'https://flights.ctrip.com/online/list/oneway-pek-sha', onScroll, now,
+    } = {}) {
+        const dom = new JSDOM(`<!doctype html><html><body>
+          <form id="searchForm">
+            <ul><li class="active">单程</li></ul>
+            <input name="owDCity" value="北京(北京大兴国际机场)(PEK)">
+            <input name="owACity" value="上海(上海浦东国际机场)(SHA)">
+            <div id="datePicker"><input aria-label="请选择日期" value="2026-06-15"></div>
+            <div class="flt-subclass"><div class="form-select-v3">经济舱</div></div>
+            <span>1成人</span><span>0儿童</span><span>0婴儿</span>
+          </form>
+          <div class="result-header"><span class="hint">所有起飞 / 到达时间均为当地时间</span></div>
+          <div class="recommend-box header"><span class="total">共32个航班</span></div>
+          <div class="sortbar-v2"><span class="sort-item active">推荐排序</span></div>
+          <main>${cards}</main>
+        </body></html>`, { url });
         Object.defineProperty(dom.window, 'innerHeight', { value: 720 });
         Object.defineProperty(dom.window, 'innerWidth', { value: 800 });
+        let scrollY = 0;
+        let scrollCount = 0;
+        Object.defineProperty(dom.window, 'scrollY', { get: () => scrollY });
+        dom.window.scrollTo = vi.fn((_x, y) => { scrollY = Number(y) || 0; });
+        dom.window.scrollBy = vi.fn((_x, y) => {
+            scrollY += Number(y) || 0;
+            scrollCount += 1;
+            onScroll?.({ dom, scrollCount, scrollY });
+        });
         dom.window.HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
-            return { x: 0, y: 100, top: 100, bottom: 160, left: 0, right: 600, width: 600, height: 60, toJSON() {} };
+            const card = this.matches('.flight-item') ? this : this.closest('.flight-item');
+            const absoluteTop = Number(card?.dataset.top || 10);
+            const top = absoluteTop - scrollY;
+            const left = Number(card?.dataset.left || 0);
+            return { x: left, y: top, top, bottom: top + 60, left, right: left + 600, width: 600, height: 60, toJSON() {} };
         };
+        const requestedScope = { origin: 'PEK', destination: 'SHA', departure_date: '2026-06-15' };
+        const js = flightDiscoverTest.buildFlightDiscoveryExtractJs(requestedScope, limit);
         const promise = Function(
-            'document', 'location', 'getComputedStyle', 'innerHeight', 'innerWidth',
-            'setTimeout',
-            `return (${flightDiscoverTest.WAIT_FOR_DISCOVERY_JS})`,
+            'window', 'document', 'getComputedStyle', 'innerHeight', 'innerWidth', 'setTimeout', 'performance',
+            `return (${js})`,
         )(
+            dom.window,
             dom.window.document,
-            dom.window.location,
             dom.window.getComputedStyle.bind(dom.window),
             dom.window.innerHeight,
             dom.window.innerWidth,
             setTimeout,
+            { now: now || (() => performance.now()) },
         );
-        return { dom, promise };
+        return { dom, promise, scrollBy: dom.window.scrollBy };
     }
 
-    it('keeps waiting for a visible first-screen card that appears after 12 seconds', async () => {
+    it('waits up to 20 seconds for a card that becomes visible through style alone', async () => {
         vi.useFakeTimers();
-        const { dom, promise } = startWait();
-
-        await vi.advanceTimersByTimeAsync(12_250);
-        const card = dom.window.document.createElement('div');
-        card.className = 'flight-item';
-        card.textContent = '可见航班';
-        dom.window.document.body.append(card);
-        await vi.advanceTimersByTimeAsync(249);
-        let result;
-        void promise.then((value) => { result = value; });
-        expect(result).toBeUndefined();
-        await vi.advanceTimersByTimeAsync(1);
-
-        await expect(promise).resolves.toBe('content');
-    });
-
-    it('detects a card that becomes visible through a style-only change', async () => {
-        vi.useFakeTimers();
-        const { dom, promise } = startWait('<div class="flight-item" style="display:none">延迟显示航班</div>');
+        const { dom, promise } = startBoundedExtract({
+            cards: boundedCard({ id: 'flight-a', style: 'display:none' }),
+            limit: 1,
+        });
 
         await vi.advanceTimersByTimeAsync(12_250);
         dom.window.document.querySelector('.flight-item').style.display = 'block';
         await vi.advanceTimersByTimeAsync(250);
 
-        await expect(promise).resolves.toBe('content');
-    });
-
-    it('times out once at the fixed 20-second deadline when no card becomes visible', async () => {
-        vi.useFakeTimers();
-        const { dom, promise } = startWait('<div class="flight-item" style="display:none">始终隐藏航班</div>');
-        let result;
-        void promise.then((value) => { result = value; });
-
-        await vi.advanceTimersByTimeAsync(10_000);
-        dom.window.document.querySelector('.flight-item').style.opacity = '0.5';
-        await vi.advanceTimersByTimeAsync(9_750);
-        expect(result).toBeUndefined();
-        await vi.advanceTimersByTimeAsync(250);
-
-        await expect(promise).resolves.toBe('timeout');
+        await expect(promise).resolves.toMatchObject({
+            items: [{ flight_number: 'TT1001' }],
+            collection: { stop_reason: 'limit', scroll_count: 0 },
+        });
         expect(vi.getTimerCount()).toBe(0);
     });
 
-    it('returns captcha immediately without starting the discovery deadline', async () => {
+    it('returns one fixed readiness timeout with no residual timer', async () => {
         vi.useFakeTimers();
-        const { promise } = startWait('', 'https://flights.ctrip.com/captcha/challenge');
+        const { promise } = startBoundedExtract({
+            cards: boundedCard({ id: 'flight-a', style: 'display:none' }),
+            limit: 1,
+        });
 
-        await expect(promise).resolves.toBe('captcha');
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        await expect(promise).resolves.toEqual({ initial_timeout: true });
         expect(vi.getTimerCount()).toBe(0);
     });
-});
 
-describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
-    function runExtract(
+    it('returns captcha immediately without scrolling or leaving a timer', async () => {
+        vi.useFakeTimers();
+        const { promise, scrollBy } = startBoundedExtract({
+            cards: '', limit: 1, url: 'https://flights.ctrip.com/captcha/challenge',
+        });
+
+        await expect(promise).resolves.toEqual({ captcha: true });
+        expect(scrollBy).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('turns an unexpected page-side exception into safe invalid output without a residual timer', async () => {
+        vi.useFakeTimers();
+        const extraction = startBoundedExtract({
+            limit: 2,
+            onScroll: () => { throw new Error('private page detail'); },
+        });
+
+        await expect(extraction.promise).resolves.toEqual({ extraction_error: true });
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('deduplicates visible observations across scrolls and stops at the requested limit', async () => {
+        vi.useFakeTimers();
+        const initial = boundedCard({ id: 'flight-a', flight: 'TT1001', top: 100 }) +
+          boundedCard({ id: 'flight-b', flight: 'TT1002', top: 200 });
+        const { dom, promise, scrollBy } = startBoundedExtract({
+            cards: initial,
+            limit: 3,
+            onScroll: ({ dom: currentDom, scrollY }) => {
+                const repeated = currentDom.window.document.querySelector('[data-testid="flight-b"]');
+                repeated.dataset.top = String(scrollY + 100);
+                repeated.querySelector('.price').textContent = '¥650';
+                currentDom.window.document.querySelector('main').insertAdjacentHTML('beforeend', boundedCard({
+                    id: 'flight-c', flight: 'TT1003', amount: '700', top: scrollY + 200,
+                }));
+            },
+        });
+
+        const result = await promise;
+
+        expect(result.items.map((item) => item.flight_number)).toEqual(['TT1001', 'TT1002', 'TT1003']);
+        expect(result.items[1].displayed_price.amount).toBe('650');
+        expect(result.collection).toMatchObject({
+            requested_limit: 3, returned_count: 3, scroll_count: 1, stop_reason: 'limit',
+        });
+        expect(scrollBy).toHaveBeenCalledWith(0, 576);
+        expect(dom.window.document.querySelector('form').getBoundingClientRect().bottom).toBeLessThan(0);
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('keeps observing the same scroll round for a delayed async card after a synchronous card', async () => {
+        vi.useFakeTimers();
+        const { dom, promise, scrollBy } = startBoundedExtract({
+            cards: boundedCard({ id: 'flight-a', flight: 'TT1001' }),
+            limit: 3,
+            onScroll: ({ dom: currentDom, scrollCount, scrollY }) => {
+                if (scrollCount !== 1) return;
+                const list = currentDom.window.document.querySelector('main');
+                list.insertAdjacentHTML('beforeend', boundedCard({
+                    id: 'flight-b', flight: 'TT1002', top: scrollY + 100,
+                }));
+                setTimeout(() => list.insertAdjacentHTML('beforeend', boundedCard({
+                    id: 'flight-c', flight: 'TT1003', top: scrollY + 200,
+                })), 750);
+            },
+        });
+
+        await vi.runAllTimersAsync();
+        const result = await promise;
+
+        expect(result.items.map((item) => item.flight_number)).toEqual(['TT1001', 'TT1002', 'TT1003']);
+        expect(result.collection).toMatchObject({ scroll_count: 1, stop_reason: 'limit' });
+        expect(scrollBy).toHaveBeenCalledTimes(1);
+        expect(dom.window.document.querySelector('[data-testid="flight-c"]')).not.toBeNull();
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('fails closed when a provider card id is reused for a different flight identity', async () => {
+        vi.useFakeTimers();
+        const { promise } = startBoundedExtract({
+            cards: boundedCard({ id: 'flight-a', flight: 'TT1001' }),
+            limit: 2,
+            onScroll: ({ dom, scrollY }) => {
+                const card = dom.window.document.querySelector('[data-testid="flight-a"]');
+                card.dataset.top = String(scrollY + 100);
+                card.innerHTML = '测试航空 TT9999 09:00 北京大兴国际机场 11:00 上海浦东国际机场 2小时 直飞';
+            },
+        });
+
+        await expect(promise).resolves.toEqual({ identity_conflict: true });
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('fails closed when the raw search controls drift after scrolling', async () => {
+        vi.useFakeTimers();
+        const { promise } = startBoundedExtract({
+            cards: boundedCard({ id: 'flight-a' }),
+            limit: 2,
+            onScroll: ({ dom }) => {
+                dom.window.document.querySelector('input[name="owDCity"]').value = '广州(白云国际机场)(CAN)';
+            },
+        });
+
+        await expect(promise).resolves.toMatchObject({ scope_valid: false, scope_drift: true });
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('fails closed when the observed cabin label drifts after scrolling', async () => {
+        vi.useFakeTimers();
+        const { promise } = startBoundedExtract({
+            cards: boundedCard({ id: 'flight-a' }),
+            limit: 2,
+            onScroll: ({ dom }) => {
+                dom.window.document.querySelector('.flt-subclass .form-select-v3').textContent = '公务舱';
+            },
+        });
+        await vi.runAllTimersAsync();
+
+        await expect(promise).resolves.toMatchObject({
+            scope_valid: false,
+            scope_drift: true,
+            observed_scope: { cabin_filter_label: '公务舱' },
+        });
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('uses distinct bounded stop reasons for plateau, scroll limit, and time budget', async () => {
+        vi.useFakeTimers();
+        const plateau = startBoundedExtract({ limit: 40 });
+        await vi.runAllTimersAsync();
+        await expect(plateau.promise).resolves.toMatchObject({
+            collection: { scroll_count: 3, stop_reason: 'plateau' },
+        });
+        expect(vi.getTimerCount()).toBe(0);
+
+        const scrollLimited = startBoundedExtract({
+            limit: 40,
+            onScroll: ({ dom, scrollCount, scrollY }) => {
+                dom.window.document.querySelector('main').insertAdjacentHTML('beforeend', boundedCard({
+                    id: `flight-${scrollCount + 1}`,
+                    flight: `TT${String(1001 + scrollCount)}`,
+                    top: scrollY + 100,
+                }));
+            },
+        });
+        await vi.runAllTimersAsync();
+        await expect(scrollLimited.promise).resolves.toMatchObject({
+            collection: { scroll_count: 12, stop_reason: 'scroll_limit' },
+        });
+
+        let elapsed = 0;
+        const timed = startBoundedExtract({
+            limit: 40,
+            now: () => elapsed,
+            onScroll: () => { elapsed = 50_000; },
+        });
+        await expect(timed.promise).resolves.toMatchObject({
+            collection: { scroll_count: 1, stop_reason: 'time_budget', duration_ms: 50_000 },
+        });
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    async function runExtract(
         requestedScope = { origin: 'PVG', destination: 'CTS', departure_date: '2026-10-02' },
         beforeCards = '',
     ) {
@@ -1474,22 +1777,26 @@ describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
         </body></html>`, { url: 'https://flights.ctrip.com/online/list/oneway-pvg-cts' });
         Object.defineProperty(dom.window, 'innerHeight', { value: 720 });
         Object.defineProperty(dom.window, 'innerWidth', { value: 800 });
+        dom.window.scrollTo = vi.fn();
+        dom.window.scrollBy = vi.fn();
         dom.window.HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
             const top = Number(this.dataset.top || 10);
             const left = Number(this.dataset.left || 0);
             return { x: left, y: top, top, bottom: top + 60, left, right: left + 600, width: 600, height: 60, toJSON() {} };
         };
         const js = flightDiscoverTest.buildFlightDiscoveryExtractJs(requestedScope, 5);
-        return Function('document', 'getComputedStyle', 'innerHeight', 'innerWidth', `return (${js})`)(
+        return Function('window', 'document', 'getComputedStyle', 'innerHeight', 'innerWidth', 'setTimeout', `return (${js})`)(
+            dom.window,
             dom.window.document,
             dom.window.getComputedStyle.bind(dom.window),
             dom.window.innerHeight,
             dom.window.innerWidth,
+            setTimeout,
         );
     }
 
-    it('keeps each card paired with its exact visible tax-included starting-price string', () => {
-        const result = runExtract();
+    it('keeps each card paired with its exact visible tax-included starting-price string', async () => {
+        const result = await runExtract();
         expect(result).toMatchObject({
             scope_valid: true,
             observed_scope: {
@@ -1538,12 +1845,12 @@ describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
         ['multiple qualifiers in one region', '<div class="flight-price"><span class="price">¥777</span><span class="qi">起</span><span class="qi">起</span><span class="tip">含税价</span></div>'],
         ['multiple tax labels in one region', '<div class="flight-price"><span class="price">¥777</span><span class="qi">起</span><span class="tip">含税价</span><span class="tip">含税价</span></div>'],
         ['malformed', '<div class="flight-price"><span class="price">¥1234567890.999</span><span class="qi">起</span><span class="tip">含税价</span></div>'],
-    ])('keeps the candidate but returns null for %s optional price evidence', (_label, priceMarkup) => {
+    ])('keeps the candidate but returns null for %s optional price evidence', async (_label, priceMarkup) => {
         const card = `<div class="flight-item" data-top="40">
           测试航空 TT1234 09:00 浦东国际机场 12:00 新千岁机场 3小时
           ${priceMarkup}
         </div>`;
-        const result = runExtract(undefined, card);
+        const result = await runExtract(undefined, card);
         const item = result.items.find((candidate) => candidate.airline === '测试航空');
 
         expect(item).toBeDefined();
@@ -1552,7 +1859,7 @@ describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
         expect(item).not.toHaveProperty('availability');
     });
 
-    it('reads only visible current text from each unique price field', () => {
+    it('reads only visible current text from each unique price field', async () => {
         const card = `<div class="flight-item" data-top="40">
           可见文本航空 VT1234 09:00 浦东国际机场 12:00 新千岁机场 3小时
           <div class="flight-price">
@@ -1560,14 +1867,14 @@ describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
             <span class="qi">起</span><span class="tip">含税价</span>
           </div>
         </div>`;
-        const result = runExtract(undefined, card);
+        const result = await runExtract(undefined, card);
         const item = result.items.find((candidate) => candidate.airline === '可见文本航空');
 
         expect(item.displayed_price).toMatchObject({ amount: '5' });
         expect(item.displayed_price.amount).not.toBe('599');
     });
 
-    it('accepts the unique leaf price inside the real nested Ctrip price wrapper', () => {
+    it('accepts the unique leaf price inside the real nested Ctrip price wrapper', async () => {
         const card = `<div class="flight-item" data-top="40">
           真实结构航空 RS5053 09:00 浦东国际机场 12:00 新千岁机场 3小时
           <div class="flight-price">
@@ -1577,13 +1884,13 @@ describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
             <div class="tip">含税价</div>
           </div>
         </div>`;
-        const result = runExtract(undefined, card);
+        const result = await runExtract(undefined, card);
         const item = result.items.find((candidate) => candidate.airline === '真实结构航空');
 
         expect(item.displayed_price).toMatchObject({ amount: '5053' });
     });
 
-    it('ignores hidden or struck leaf copies when one current leaf price remains', () => {
+    it('ignores hidden or struck leaf copies when one current leaf price remains', async () => {
         const card = `<div class="flight-item" data-top="40">
           副本结构航空 CP5053 09:00 浦东国际机场 12:00 新千岁机场 3小时
           <div class="flight-price">
@@ -1596,13 +1903,13 @@ describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
             <div class="tip">含税价</div>
           </div>
         </div>`;
-        const result = runExtract(undefined, card);
+        const result = await runExtract(undefined, card);
         const item = result.items.find((candidate) => candidate.airline === '副本结构航空');
 
         expect(item.displayed_price).toMatchObject({ amount: '5053' });
     });
 
-    it('rejects a parent price wrapper that carries another visible current amount', () => {
+    it('rejects a parent price wrapper that carries another visible current amount', async () => {
         const card = `<div class="flight-item" data-top="40">
           父级冲突航空 PC5053 09:00 浦东国际机场 12:00 新千岁机场 3小时
           <div class="flight-price">
@@ -1612,41 +1919,41 @@ describe('ctrip flight-discover visible DOM extraction (JSDOM)', () => {
             <div class="tip">含税价</div>
           </div>
         </div>`;
-        const result = runExtract(undefined, card);
+        const result = await runExtract(undefined, card);
         const item = result.items.find((candidate) => candidate.airline === '父级冲突航空');
 
         expect(item).toBeDefined();
         expect(item.displayed_price).toBeNull();
     });
 
-    it('marks the extraction invalid when the visible search scope drifts', () => {
-        expect(runExtract({ origin: 'PEK', destination: 'CTS', departure_date: '2026-10-02' }).scope_valid).toBe(false);
+    it('marks the extraction invalid when the visible search scope drifts', async () => {
+        expect((await runExtract({ origin: 'PEK', destination: 'CTS', departure_date: '2026-10-02' })).scope_valid).toBe(false);
     });
 
-    it('skips cards with invalid clock values or no credible airport anchors', () => {
+    it('skips cards with invalid clock values or no credible airport anchors', async () => {
         const malformed = `
           <div class="flight-item" data-top="40">虚假时间航空 ZZ999 29:90 浦东国际机场 99:99 新千岁机场 1小时</div>
           <div class="flight-item" data-top="50">虚假机场航空 YY999 09:00 ¥ 10:00 订票 1小时</div>`;
-        const result = runExtract(undefined, malformed);
+        const result = await runExtract(undefined, malformed);
         expect(result.items).toHaveLength(5);
         expect(result.items.map((item) => item.airline)).not.toContain('虚假时间航空');
         expect(result.items.map((item) => item.airline)).not.toContain('虚假机场航空');
     });
 
-    it('does not treat a card under an invisible ancestor as visible', () => {
+    it('does not treat a card under an invisible ancestor as visible', async () => {
         const hidden = `<div style="opacity:0">
           <div class="flight-item" data-top="40">隐藏父级航空 HH999 09:00 浦东国际机场 10:00 新千岁机场 1小时</div>
         </div>`;
-        const result = runExtract(undefined, hidden);
+        const result = await runExtract(undefined, hidden);
         expect(result.items).toHaveLength(5);
         expect(result.items.map((item) => item.airline)).not.toContain('隐藏父级航空');
     });
 
-    it('does not treat horizontally offscreen cards as visible', () => {
+    it('does not treat horizontally offscreen cards as visible', async () => {
         const offscreen = `
           <div class="flight-item" data-top="40" data-left="-700">左侧屏外航空 LL999 09:00 浦东国际机场 10:00 新千岁机场 1小时</div>
           <div class="flight-item" data-top="50" data-left="900">右侧屏外航空 RR999 09:00 浦东国际机场 10:00 新千岁机场 1小时</div>`;
-        const result = runExtract(undefined, offscreen);
+        const result = await runExtract(undefined, offscreen);
         expect(result.items).toHaveLength(5);
         expect(result.items.map((item) => item.airline)).not.toContain('左侧屏外航空');
         expect(result.items.map((item) => item.airline)).not.toContain('右侧屏外航空');
