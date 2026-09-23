@@ -40897,6 +40897,12 @@
         "help": "Also read X webpage translation (zh-CN); keeps original text and returns per-post translation status"
       },
       {
+        "name": "translate-relations",
+        "type": "string",
+        "required": false,
+        "help": "Translate related posts: all, quote, reply or none (reposts always included)"
+      },
+      {
         "name": "context-depth",
         "type": "int",
         "default": 1,

@@ -21,3 +21,9 @@ Unavailable translation preserves original data and adds per-post warnings. Cons
 ## Live acceptance
 
 The production detail function was executed in an isolated adapter session on NAS before deployment. OpenAI Note + quote returned two separately identified Chinese translations (555/451 original characters, 211/150 translated characters), in 16.1 seconds. Original Chinese reply + parent returned not_needed for both. Article returned article_translation_not_supported with original article data intact. NASA photo post translation preserved its text URL and did not mix image alt text into the translation. These observations do not establish completeness for every X post shape.
+
+## 2.2.1：接口优先
+
+默认先在已登录 X 页面内请求网页正在使用的 Grok translation 接口，成功则不导航到逐条推文。返回 method=api/dom 与 duration_ms；接口不可用时在预算内回退 DOM，401/登录失效上抛，429 明确 unavailable 且不回退。原始 text 保留。
+
+可选 `--translate-relations all|quote|reply|none` 控制沿已解析关系图需要翻译的节点，repost 仍包含。未指定时兼容原行为。只有显示范围内的节点会添加 translation。Article 正文等限制不变，完整性仍为 unknown。
