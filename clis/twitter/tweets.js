@@ -1,3 +1,4 @@
+import { authorFields } from './tweet-data.js';
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { ArgumentError, CommandExecutionError, EmptyResultError } from '@jackwener/opencli/errors';
 import { sanitizeQueryId, extractMedia, extractQuotedTweet, describeTwitterApiError } from './shared.js';
@@ -32,6 +33,7 @@ function extractTweet(result, seen) {
     return {
         id: tw.rest_id,
         author: screenName,
+        ...authorFields(user),
         name: displayName,
         text: noteText || legacy.full_text || '',
         likes: legacy.favorite_count || 0,
@@ -117,7 +119,7 @@ cli({
         { name: 'page-delay', type: 'int', default: DEFAULT_PAGE_DELAY_SECONDS, help: 'Seconds to wait between paginated timeline requests to reduce rate-limit risk. Use 0 to disable.' },
         { name: 'top-by-engagement', type: 'int', default: 0, help: 'When set to N>0, re-rank the tweets by weighted engagement (likes×1 + retweets×3 + replies×2 + bookmarks×5 + log10(views+1)×0.5) and return the top N. Default 0 keeps the chronological ordering.' },
     ],
-    columns: ['id', 'author', 'created_at', 'is_retweet', 'text', 'likes', 'retweets', 'replies', 'views', 'url', 'has_media', 'media_urls', 'media_posters', 'quoted_tweet'],
+    columns: ['id', 'author_info', 'avatar_url', 'author', 'created_at', 'is_retweet', 'text', 'likes', 'retweets', 'replies', 'views', 'url', 'has_media', 'media_urls', 'media_posters', 'quoted_tweet'],
     func: async (page, kwargs) => {
         const limit = normalizeLimit(kwargs.limit);
         const pageDelaySeconds = normalizePageDelaySeconds(kwargs['page-delay']);

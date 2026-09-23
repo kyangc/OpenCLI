@@ -89,6 +89,8 @@ describe('twitter bookmark-folder timeline parser', () => {
         const { tweets, nextCursor } = parseBookmarkFolderTimeline(data, new Set());
         expect(tweets).toEqual([
             {
+                avatar_url: null,
+                author_info: { id: null, handle: 'alice', name: null, avatar_url: null, verification: { verified: null, type: 'unknown' } },
                 id: '1',
                 author: 'alice',
                 text: 'first folder tweet',

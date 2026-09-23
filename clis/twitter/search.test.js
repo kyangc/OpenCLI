@@ -79,6 +79,8 @@ describe('twitter search command', () => {
         const result = await command.func(page, { query: 'from:alice', filter: 'top', limit: 5 });
         expect(result).toEqual([
             {
+                avatar_url: null,
+                author_info: { id: null, handle: 'alice', name: null, avatar_url: null, verification: { verified: null, type: 'unknown' } },
                 id: '1',
                 author: 'alice',
                 bio: 'Search author bio',

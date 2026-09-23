@@ -21,6 +21,8 @@ describe('twitter list-tweets parser', () => {
             },
         }, new Set());
         expect(tweet).toEqual({
+            avatar_url: null,
+            author_info: { id: null, handle: 'bob', name: 'Bob', avatar_url: null, verification: { verified: null, type: 'unknown' } },
             id: '99',
             author: 'bob',
             name: 'Bob',
@@ -65,6 +67,8 @@ describe('twitter list-tweets parser', () => {
             },
         }, new Set());
         expect(tweet?.quoted_tweet).toEqual({
+            avatar_url: null,
+            author_info: { id: null, handle: 'alice', name: 'Alice', avatar_url: null, verification: { verified: null, type: 'unknown' } },
             id: '499',
             author: 'alice',
             name: 'Alice',

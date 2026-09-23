@@ -1,3 +1,4 @@
+import { authorFields } from './tweet-data.js';
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { ArgumentError, AuthRequiredError, CommandExecutionError } from '@jackwener/opencli/errors';
 import { TWITTER_BEARER_TOKEN, applyTopByEngagement } from './utils.js';
@@ -66,6 +67,7 @@ export function extractFolderTweet(result, seen) {
     return {
         id: tw.rest_id,
         author: screenName,
+        ...authorFields(user),
         text: noteText || legacy.full_text || '',
         likes: legacy.favorite_count || 0,
         retweets: legacy.retweet_count || 0,
@@ -129,7 +131,7 @@ cli({
         { name: 'limit', type: 'int', default: 20, help: 'Maximum number of bookmarks to return (default 20).' },
         { name: 'top-by-engagement', type: 'int', default: 0, help: 'When set to N>0, re-rank the folder by weighted engagement (likes×1 + retweets×3 + replies×2 + bookmarks×5 + log10(views+1)×0.5) and return the top N. Default 0 keeps the API\'s native (saved-time) ordering.' },
     ],
-    columns: ['id', 'author', 'text', 'likes', 'retweets', 'bookmarks', 'created_at', 'url', 'has_media', 'media_urls', 'media_posters'],
+    columns: ['id', 'author_info', 'avatar_url', 'author', 'text', 'likes', 'retweets', 'bookmarks', 'created_at', 'url', 'has_media', 'media_urls', 'media_posters'],
     func: async (page, kwargs) => {
         const folderId = String(kwargs['folder-id'] || '').trim();
         if (!folderId || !FOLDER_ID_PATTERN.test(folderId)) {

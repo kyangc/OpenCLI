@@ -1,3 +1,4 @@
+import { authorFields } from './tweet-data.js';
 import { ArgumentError } from '@jackwener/opencli/errors';
 
 const QUERY_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -519,6 +520,7 @@ export function extractQuotedTweet(tweet) {
     const out = {
         id: qTw.rest_id,
         author: qScreenName,
+        ...authorFields(qUser),
         name: qDisplayName,
         text: qText,
         created_at: typeof qLegacy.created_at === 'string' ? qLegacy.created_at : '',

@@ -15,7 +15,7 @@ const DISCOVERY_OUTPUT_ERROR = 'Ctrip flight-discover visible flight-card extrac
 
 function buildFlightDiscoveryExtractJs(requestedScope, limit) {
     const requestedJson = JSON.stringify(requestedScope);
-    const boundedLimit = Math.min(MAX_DISCOVERY_ITEMS, Math.max(1, Number(limit) || DEFAULT_DISCOVERY_ITEMS));
+    const boundedLimit = parseStrictIntegerRange('limit', limit, DEFAULT_DISCOVERY_ITEMS, 1, MAX_DISCOVERY_ITEMS);
     return `new Promise((resolve) => {
       const collect = async () => {
       const requested = ${requestedJson};

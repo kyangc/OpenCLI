@@ -40600,7 +40600,10 @@
       "title",
       "author",
       "content",
-      "url"
+      "url",
+      "author_info",
+      "avatar_url",
+      "article"
     ],
     "type": "js",
     "modulePath": "twitter/article.js",
@@ -40692,6 +40695,8 @@
     ],
     "columns": [
       "id",
+      "author_info",
+      "avatar_url",
       "author",
       "text",
       "likes",
@@ -40779,6 +40784,8 @@
     ],
     "columns": [
       "id",
+      "author_info",
+      "avatar_url",
       "author",
       "text",
       "likes",
@@ -40866,6 +40873,44 @@
     "modulePath": "twitter/delete.js",
     "sourceFile": "twitter/delete.js",
     "navigateBefore": true
+  },
+  {
+    "site": "twitter",
+    "name": "detail",
+    "description": "Fetch one X post with author avatars, typed media, polls, article blocks and bounded quote/reply context (versioned JSON)",
+    "access": "read",
+    "domain": "x.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "tweet-id",
+        "type": "string",
+        "required": true,
+        "positional": true,
+        "help": "Numeric tweet ID or HTTPS status URL"
+      },
+      {
+        "name": "context-depth",
+        "type": "int",
+        "default": 1,
+        "required": false,
+        "help": "Related post depth: 0, 1 (default), or 2; at most 8 posts"
+      }
+    ],
+    "columns": [
+      "schema_version",
+      "requested_id",
+      "root_id",
+      "fetched_at",
+      "posts",
+      "context",
+      "warnings"
+    ],
+    "type": "js",
+    "modulePath": "twitter/detail.js",
+    "sourceFile": "twitter/detail.js",
+    "navigateBefore": "https://x.com"
   },
   {
     "site": "twitter",
@@ -41196,6 +41241,8 @@
     ],
     "columns": [
       "id",
+      "author_info",
+      "avatar_url",
       "author",
       "name",
       "text",
@@ -41503,6 +41550,8 @@
     ],
     "columns": [
       "id",
+      "author_info",
+      "avatar_url",
       "author",
       "bio",
       "text",
@@ -41691,6 +41740,8 @@
       }
     ],
     "columns": [
+      "author_info",
+      "avatar_url",
       "screen_name",
       "name",
       "bio",
@@ -41963,6 +42014,8 @@
     ],
     "columns": [
       "id",
+      "author_info",
+      "avatar_url",
       "author",
       "bio",
       "text",
@@ -42014,6 +42067,8 @@
     ],
     "columns": [
       "id",
+      "author_info",
+      "avatar_url",
       "author",
       "bio",
       "text",
@@ -42068,6 +42123,8 @@
     ],
     "columns": [
       "id",
+      "author_info",
+      "avatar_url",
       "author",
       "bio",
       "text",
@@ -42155,6 +42212,8 @@
     ],
     "columns": [
       "id",
+      "author_info",
+      "avatar_url",
       "author",
       "created_at",
       "is_retweet",

@@ -1,3 +1,4 @@
+import { authorFields } from './tweet-data.js';
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { AuthRequiredError, CommandExecutionError } from '@jackwener/opencli/errors';
 import { BROWSER_JSON_SNIFF_FN, throwIfLoginWall } from '@jackwener/opencli/utils';
@@ -67,6 +68,7 @@ export function extractTimelineTweet(result, seen) {
     return {
         id: tw.rest_id,
         author: screenName,
+        ...authorFields(user),
         name: displayName,
         bio,
         text: noteText || legacy.full_text || '',
@@ -125,7 +127,7 @@ cli({
         { name: 'limit', type: 'int', default: 50 },
         { name: 'top-by-engagement', type: 'int', default: 0, help: 'When set to N>0, re-rank the list timeline by weighted engagement (likes×1 + retweets×3 + replies×2 + bookmarks×5 + log10(views+1)×0.5) and return the top N. Default 0 keeps the list\'s native (recency) ordering.' },
     ],
-    columns: ['id', 'author', 'bio', 'text', 'likes', 'retweets', 'replies', 'created_at', 'url', 'has_media', 'media_urls', 'media_posters', 'card', 'quoted_tweet'],
+    columns: ['id', 'author_info', 'avatar_url', 'author', 'bio', 'text', 'likes', 'retweets', 'replies', 'created_at', 'url', 'has_media', 'media_urls', 'media_posters', 'card', 'quoted_tweet'],
     func: async (page, kwargs) => {
         const listId = String(kwargs.listId || '').trim();
         if (!listId || !/^\d+$/.test(listId)) {

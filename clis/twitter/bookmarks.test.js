@@ -19,6 +19,8 @@ describe('twitter bookmarks parser', () => {
             core: { user_results: { result: { legacy: { screen_name: 'alice', name: 'Alice' } } } },
         }, new Set());
         expect(tweet).toEqual({
+            avatar_url: null,
+            author_info: { id: null, handle: 'alice', name: 'Alice', avatar_url: null, verification: { verified: null, type: 'unknown' } },
             id: '1',
             author: 'alice',
             name: 'Alice',

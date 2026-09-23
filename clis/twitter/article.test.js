@@ -215,3 +215,21 @@ describe('twitter article command', () => {
         ]);
     });
 });
+
+
+describe('twitter article structured additions', () => {
+    it('keeps Markdown while projecting author and article blocks without raw viewer fields', async () => {
+        const command = getRegistry().get('twitter/article');
+        const page = createPage([{ title: 'A', author: 'alice', content: '# A', url: 'https://x.com/alice/status/1',
+            _authorSource: { legacy: { screen_name: 'alice', name: 'Alice', profile_image_url_https: 'https://pbs.twimg.com/profile_images/a.jpg' }, private_viewer_field: 'do-not-export' },
+            _articleSource: { article_results: { result: { title: 'A', content_state: { blocks: [{ type: 'unstyled', text: 'body' }] } } } },
+        }]);
+        const [row] = await command.func(page, { 'tweet-id': '1' });
+        expect(row.content).toBe('# A');
+        expect(row.avatar_url).toBe('https://pbs.twimg.com/profile_images/a.jpg');
+        expect(row.article.blocks[0].text).toBe('body');
+        expect(JSON.stringify(row)).not.toContain('do-not-export');
+        expect(row).not.toHaveProperty('_authorSource');
+        expect(row).not.toHaveProperty('_articleSource');
+    });
+});

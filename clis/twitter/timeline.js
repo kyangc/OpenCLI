@@ -1,3 +1,4 @@
+import { authorFields } from './tweet-data.js';
 import { AuthRequiredError, CommandExecutionError } from '@jackwener/opencli/errors';
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { resolveTwitterQueryId, extractMedia, extractCard, extractQuotedTweet, describeTwitterApiError } from './shared.js';
@@ -80,6 +81,7 @@ function extractTweet(result, seen) {
     return {
         id: tw.rest_id,
         author: screenName,
+        ...authorFields(u),
         bio,
         text: noteText || l.full_text || '',
         likes: l.favorite_count || 0,
@@ -156,7 +158,7 @@ cli({
         { name: 'limit', type: 'int', default: 20, help: 'Maximum number of tweets to return (default 20).' },
         { name: 'top-by-engagement', type: 'int', default: 0, help: 'When set to N>0, re-rank the timeline by weighted engagement (likes×1 + retweets×3 + replies×2 + bookmarks×5 + log10(views+1)×0.5) and return the top N. Default 0 keeps X\'s native ordering.' },
     ],
-    columns: ['id', 'author', 'bio', 'text', 'likes', 'retweets', 'replies', 'views', 'created_at', 'url', 'has_media', 'media_urls', 'media_posters', 'card', 'quoted_tweet'],
+    columns: ['id', 'author_info', 'avatar_url', 'author', 'bio', 'text', 'likes', 'retweets', 'replies', 'views', 'created_at', 'url', 'has_media', 'media_urls', 'media_posters', 'card', 'quoted_tweet'],
     func: async (page, kwargs) => {
         const limit = kwargs.limit || 20;
         const timelineType = kwargs.type === 'following' ? 'following' : 'for-you';

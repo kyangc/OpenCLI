@@ -28,6 +28,8 @@ describe('twitter profile command', () => {
         }, 'fallback');
 
         expect(rows).toEqual([{
+            avatar_url: null,
+            author_info: { id: null, handle: 'AstroHanRay', name: 'AstroHan', avatar_url: null, verification: { verified: true, type: 'blue' } },
             screen_name: 'AstroHanRay',
             name: 'AstroHan',
             bio: 'bio text',
