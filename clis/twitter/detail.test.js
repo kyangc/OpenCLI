@@ -23,6 +23,15 @@ describe('X detail content mapping', () => {
     it('preserves legacy verification when blue verification is false', () => {
         expect(extractAuthor({ is_blue_verified: false, legacy: { verified: true, verified_type: 'Business' } }).verification).toEqual({ verified: true, type: 'gold' });
     });
+    it('preserves modern organization verification and public affiliation badges', () => {
+        for (const [verified_type, type] of [['Business', 'gold'], ['Government', 'gray']]) {
+            expect(extractAuthor({is_blue_verified: true, verification: {verified_type}}).verification).toEqual({verified: true, type});
+        }
+        const affiliation = {badge: {url: 'https://pbs.twimg.com/profile_images/org.png'}, description: 'Organization', url: {url: 'https://x.com/org'}};
+        expect(extractAuthor({affiliates_highlighted_label: {label: affiliation}}).affiliation).toEqual({image_url: affiliation.badge.url, description: 'Organization', url: 'https://x.com/org'});
+        expect(extractAuthor({affiliates_highlighted_label: {label: {...affiliation, badge: {url: 'https://evil.test/icon.svg'}}}}).affiliation).toBeUndefined();
+        expect(extractAuthor({is_blue_verified: false}).verification).toEqual({verified: false, type: 'unknown'});
+    });
     it('rejects identity-only unavailable payloads instead of manufacturing empty content', () => {
         expect(extractPost({ rest_id: '1', core: { user_results: { result: user } } })).toBeNull();
     });

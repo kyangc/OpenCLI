@@ -17,13 +17,18 @@ export function extractAuthor(user) {
     const handle = str(user?.core?.screen_name) || str(legacy.screen_name);
     const avatar = publicUrl(user?.avatar?.image_url, true) || publicUrl(legacy.profile_image_url_https, true);
     const flags = [user?.is_blue_verified, user?.verification?.verified, legacy.verified].filter(v => typeof v === 'boolean');
-    const verified = flags.length ? flags.some(Boolean) : null;
-    const badge = legacy.verified_type;
+    let verified = flags.length ? flags.some(Boolean) : null;
+    const badge = str(user?.verification?.verified_type) || str(user?.verified_type) || legacy.verified_type;
     const verificationType = badge === 'Business' ? 'gold' : badge === 'Government' ? 'gray' : user?.is_blue_verified === true ? 'blue' : 'unknown';
+    if (verificationType === 'gold' || verificationType === 'gray') verified = true;
+    const label = user?.affiliates_highlighted_label?.label;
+    const badgeUrl = publicUrl(label?.badge?.url, true);
+    const affiliation = badgeUrl ? { image_url: badgeUrl, description: str(label?.description), url: publicUrl(label?.url?.url) } : null;
     return {
         id: id(user?.rest_id), handle: handle && /^[A-Za-z0-9_]{1,15}$/.test(handle) ? handle : null,
         name: str(user?.core?.name) || str(legacy.name), avatar_url: avatar,
         verification: { verified, type: verificationType },
+        ...(affiliation ? { affiliation } : {}),
     };
 }
 export function authorFields(user) {
