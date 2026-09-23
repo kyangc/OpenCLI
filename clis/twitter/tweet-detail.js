@@ -4,6 +4,7 @@ import { resolveTwitterOperationMetadata, unwrapBrowserResult, extractCard } fro
 import { TWITTER_BEARER_TOKEN } from './utils.js';
 import { appendTranslations, validateTranslationTarget, validateTranslationRelations } from './tweet-translation.js';
 import { extractPost, unwrapTweet } from './tweet-data.js';
+import { sessionScope } from './tweet-session.js';
 
 export function normalizeDetailId(value) {
     const raw = String(value ?? '').trim();
@@ -73,7 +74,7 @@ export async function collectDetail(rootId, fetchTweet, { depth = 1, maxNodes = 
     return result;
 }
 
-export async function fetchDetail(page, input, depth, translateTo, translateRelations) {
+export async function fetchDetail(page, input, depth, translateTo, translateRelations, options = {}) {
     validateTranslationTarget(translateTo);
     validateTranslationRelations(translateRelations);
     const rootId = normalizeDetailId(input);
@@ -110,7 +111,8 @@ export async function fetchDetail(page, input, depth, translateTo, translateRela
         if (data?.error || (data?.errors?.length && !data?.data?.tweetResult?.result)) throw new CommandExecutionError('X detail request failed');
         return data?.data?.tweetResult?.result;
     }, { depth });
-    await appendTranslations(page, detail, translateTo, { relations: translateRelations });
+    if (options.cache) detail.session_scope = sessionScope(cookies);
+    await appendTranslations(page, detail, translateTo, { relations: translateRelations, cacheScope: detail.session_scope, refresh: options.refresh });
     if (Buffer.byteLength(JSON.stringify(detail, null, 2)) > 900_000) throw new CommandExecutionError('Translated detail exceeds output budget; use --context-depth 0');
     return detail;
 }

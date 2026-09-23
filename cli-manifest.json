@@ -40903,6 +40903,20 @@
         "help": "Translate related posts: all, quote, reply or none (reposts always included)"
       },
       {
+        "name": "cache",
+        "type": "boolean",
+        "default": false,
+        "required": false,
+        "help": "Enable session-isolated translation caching and include session_scope metadata"
+      },
+      {
+        "name": "refresh",
+        "type": "boolean",
+        "default": false,
+        "required": false,
+        "help": "Bypass translation cache and refresh successful entries"
+      },
+      {
         "name": "context-depth",
         "type": "int",
         "default": 1,
@@ -40917,7 +40931,8 @@
       "fetched_at",
       "posts",
       "context",
-      "warnings"
+      "warnings",
+      "session_scope"
     ],
     "type": "js",
     "modulePath": "twitter/detail.js",
@@ -42045,6 +42060,23 @@
     "modulePath": "twitter/search.js",
     "sourceFile": "twitter/search.js",
     "navigateBefore": "https://x.com"
+  },
+  {
+    "site": "twitter",
+    "name": "session-scope",
+    "description": "Read an opaque cache scope for the current X login without navigating or exposing cookies",
+    "access": "read",
+    "domain": "x.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [],
+    "columns": [
+      "scope"
+    ],
+    "type": "js",
+    "modulePath": "twitter/session-scope.js",
+    "sourceFile": "twitter/session-scope.js",
+    "navigateBefore": false
   },
   {
     "site": "twitter",
