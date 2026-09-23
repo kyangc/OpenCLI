@@ -1,6 +1,7 @@
 import { ArgumentError, AuthRequiredError, LoginWallError } from '@jackwener/opencli/errors';
 import { unwrapBrowserResult } from './shared.js';
 import { requestTranslation } from './tweet-translation-api.js';
+import { TranslationCache, translationKey } from './tweet-translation-cache.js';
 
 export function validateTranslationRelations(value = 'all') {
     if (!['all', 'quote', 'reply', 'none'].includes(value)) throw new ArgumentError('translate-relations must be all, quote, reply or none');
@@ -117,10 +118,14 @@ export async function appendTranslations(page, result, target, options = {}) {
     validateTranslationTarget(target);
     if (target === undefined) return result;
     const deadline = Date.now() + 60_000;
+    const cache = options.cacheScope ? new TranslationCache() : null;
     const ids = options.relations === undefined ? new Set(Object.keys(result.posts)) : translationPostIds(result, options.relations);
     const posts = Object.values(result.posts).filter(p => ids.has(p.id)).sort((a,b) => (a.id === result.root_id ? -1 : b.id === result.root_id ? 1 : 0));
     for (const post of posts) {
-        post.translation = await translatePostWithApi(page, post, { deadline, ...options });
+        const key = cache ? translationKey(options.cacheScope, post) : null;
+        const cached = cache && !options.refresh && !post.article ? await cache.get(key) : null;
+        post.translation = cached ? { ...cached, cache_hit: true, duration_ms: 0 } : await translatePostWithApi(page, post, { deadline, ...options });
+        if (cache && !cached) { post.translation.cache_hit = false; await cache.set(key, post.translation); }
         if (post.translation.status === 'unavailable' || post.translation.completeness === 'partial') result.warnings.push({ code: 'translation_' + (post.translation.reason || 'partial'), post_id: post.id, field: 'translation' });
     }
     return result;

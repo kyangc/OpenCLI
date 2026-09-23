@@ -1,6 +1,6 @@
 # X detail translation
 
-Strategy: UI_SELECTOR. Contract: visible-ui.
+Current strategy: authenticated webpage API, with visible-UI fallback. The section below describes the original 2.2.0 DOM implementation; version changes follow at the end.
 
 Evidence (2026-09-23): in the existing NAS X session, the target post's `显示翻译` button changes to `显示原文`; its own `tweetText` becomes `lang=zh`. NASA 2041557036274475228 and OpenAI Note 2097375276384567642 returned nonempty Chinese text. The Note quote remained English, so related posts must be visited independently. Authentication stays in the existing browser session. No account settings mutation or undocumented translation endpoint replay is required. The source detail API remains unchanged.
 
@@ -27,3 +27,9 @@ The production detail function was executed in an isolated adapter session on NA
 默认先在已登录 X 页面内请求网页正在使用的 Grok translation 接口，成功则不导航到逐条推文。返回 method=api/dom 与 duration_ms；接口不可用时在预算内回退 DOM，401/登录失效上抛，429 明确 unavailable 且不回退。原始 text 保留。
 
 可选 `--translate-relations all|quote|reply|none` 控制沿已解析关系图需要翻译的节点，repost 仍包含。未指定时兼容原行为。只有显示范围内的节点会添加 translation。Article 正文等限制不变，完整性仍为 unknown。
+
+## 2.2.2：可选缓存
+
+`twitter session-scope` 不导航，只返回登录凭据的不可重放 SHA-256 作用域标识，不返回 Cookie。凭据轮换或账号切换会改变标识。海报服务每次使用缓存前读取并核对 scope；这不替代 X 服务端的会话有效性校验，凭据存在但已被撤销时，缓存最多沿用其既有 TTL。
+
+`twitter detail --cache true` 输出 session_scope，启用按 scope、推文ID、完整原文、源语言、目标语言和实现版本隔离的译文缓存。默认关闭，正常抓取行为不变。成功且非partial译文缓存7天，最多512条、每条300KB，位于 OPENCLI_CONFIG_DIR/cache/x-translations（默认 ~/.opencli/cache/x-translations）。`--refresh true` 跳过已有译文缓存并更新成功结果，失败和partial不缓存。cache_hit 标记命中，命中时 duration_ms=0（未发翻译请求，非文件读取计时）。
