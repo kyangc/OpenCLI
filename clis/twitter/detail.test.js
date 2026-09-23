@@ -115,7 +115,9 @@ describe('detail command transport', () => {
         expect(getRegistry().get('twitter/detail').access).toBe('read');
         expect(normalizeDetailId('https://x.com/i/status/123/photo/1?s=20')).toBe('123');
         for (const input of ['https://evil.test/a/status/1', 'https://x.com@evil.test/a/status/1', '1;alert(1)', 'https://x.com:4430/a/status/1']) expect(() => normalizeDetailId(input)).toThrow();
+        expect(getRegistry().get('twitter/detail').args.some(a => a.name === 'translate-to')).toBe(true);
         const page = { getCookies: vi.fn() };
+        await expect(fetchDetail(page, '1', 0, 'fr')).rejects.toThrow(/translate-to/);
         await expect(fetchDetail(page, '1', 3)).rejects.toThrow(/context-depth/); expect(page.getCookies).not.toHaveBeenCalled();
     });
     it('executes the browser fetch script with URL params and unwraps Bridge envelopes', async () => {
@@ -131,6 +133,14 @@ describe('detail command transport', () => {
             }) };
         const result = await fetchDetail(page, '1', 0); expect(result.posts['1'].author.avatar_url).toBe(user.avatar.image_url);
         expect(JSON.stringify(result)).not.toContain('test-csrf');
+    });
+    it('returns original and translated text together through the production detail path', async () => {
+        const page = { getCookies: async () => [{ name: 'ct0', value: 'x' }], goto: vi.fn(), evaluate: vi.fn()
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce({ data: { tweetResult: { result: tweet('1', {full_text:'hello',lang:'en'}) } } })
+            .mockResolvedValueOnce({state:'translated',lang:'zh',text:'你好',truncated:false}) };
+        const result = await fetchDetail(page, '1', 0, 'zh-CN');
+        expect(result.posts['1']).toMatchObject({text:'hello',lang:'en',translation:{text:'你好',status:'translated',source_lang:'en'}});
     });
     it('surfaces authentication failures', async () => {
         await expect(fetchDetail({ getCookies: async () => [] }, '1', 0)).rejects.toBeInstanceOf(AuthRequiredError);

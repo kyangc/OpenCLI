@@ -40891,6 +40891,12 @@
         "help": "Numeric tweet ID or HTTPS status URL"
       },
       {
+        "name": "translate-to",
+        "type": "string",
+        "required": false,
+        "help": "Also read X webpage translation (zh-CN); keeps original text and returns per-post translation status"
+      },
+      {
         "name": "context-depth",
         "type": "int",
         "default": 1,
