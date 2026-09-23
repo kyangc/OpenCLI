@@ -41751,6 +41751,72 @@
   },
   {
     "site": "twitter",
+    "name": "poster-detail",
+    "description": "Fetch poster data using a retained X page; run through Backend for serialized page ownership",
+    "access": "read",
+    "domain": "x.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "tweet-id",
+        "type": "string",
+        "required": true,
+        "positional": true,
+        "help": "Numeric tweet ID or HTTPS status URL"
+      },
+      {
+        "name": "translate-to",
+        "type": "string",
+        "required": false,
+        "help": "Also read X webpage translation (zh-CN); keeps original text and returns per-post translation status"
+      },
+      {
+        "name": "translate-relations",
+        "type": "string",
+        "required": false,
+        "help": "Translate related posts: all, quote, reply or none (reposts always included)"
+      },
+      {
+        "name": "cache",
+        "type": "boolean",
+        "default": false,
+        "required": false,
+        "help": "Enable session-isolated translation caching and include session_scope metadata"
+      },
+      {
+        "name": "refresh",
+        "type": "boolean",
+        "default": false,
+        "required": false,
+        "help": "Bypass translation cache and refresh successful entries"
+      },
+      {
+        "name": "context-depth",
+        "type": "int",
+        "default": 1,
+        "required": false,
+        "help": "Related post depth: 0, 1 (default), or 2; at most 8 posts"
+      }
+    ],
+    "columns": [
+      "schema_version",
+      "requested_id",
+      "root_id",
+      "fetched_at",
+      "posts",
+      "context",
+      "warnings",
+      "session_scope"
+    ],
+    "type": "js",
+    "modulePath": "twitter/poster-detail.js",
+    "sourceFile": "twitter/poster-detail.js",
+    "navigateBefore": "https://x.com",
+    "siteSession": "persistent"
+  },
+  {
+    "site": "twitter",
     "name": "profile",
     "description": "Fetch a Twitter user profile — bio, stats, etc. (defaults to the logged-in user when no username is given)",
     "access": "read",

@@ -94,3 +94,7 @@ Backend JSON/idempotency semantics, not live X availability. See
 [verification evidence](../twitter-detail-verification.md) for the current NAS
 acceptance results and remaining content-shape coverage. Poster rendering and
 iPhone Shortcut acceptance belong to the consuming service.
+
+## Poster page reuse (2.2.3)
+
+`twitter poster-detail` has the same parameters and JSON contract as `twitter detail`, but retains the X site page. Use it through opencli-backend: the catalog scheduler serializes persistent readers by profile/site and excludes conflicting writes. Normal detail remains ephemeral. Standalone concurrent invocations of poster-detail do not acquire the Backend scheduler lock; callers must serialize them. A missing page is recreated by the browser session layer and an off-domain page is navigated back to X. Each fetch still selects the requested post by ID; page reuse does not imply cached tweet content.

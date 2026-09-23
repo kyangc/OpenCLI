@@ -148,3 +148,18 @@ describe('detail command transport', () => {
         await expect(fetchDetail(page, '1', 0)).rejects.toBeInstanceOf(AuthRequiredError);
     });
 });
+
+// Keep the regular CLI isolated; retained page ownership is a separate Backend entrypoint.
+describe('poster detail command lifecycle', () => {
+    it('uses the same data contract with a persistent session only for posters', async () => {
+        await import('./poster-detail.js');
+        const registry = getRegistry();
+        const detail = registry.get('twitter/detail');
+        const poster = registry.get('twitter/poster-detail');
+        expect(poster.siteSession).toBe('persistent');
+        expect(detail.siteSession).not.toBe('persistent');
+        expect(poster.func).toBe(detail.func);
+        expect(poster.args).toEqual(detail.args);
+        expect(poster.columns).toEqual(detail.columns);
+    });
+});
