@@ -1,3 +1,4 @@
+import { extractArticle, authorFields } from './tweet-data.js';
 import { AuthRequiredError, CommandExecutionError } from '@jackwener/opencli/errors';
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { resolveTwitterQueryId, describeTwitterApiError, unwrapBrowserResult } from './shared.js';
@@ -19,7 +20,7 @@ cli({
     args: [
         { name: 'tweet-id', type: 'string', positional: true, required: true, help: 'Tweet ID or URL containing the article' },
     ],
-    columns: ['title', 'author', 'content', 'url'],
+    columns: ['title', 'author', 'content', 'url', 'author_info', 'avatar_url', 'article'],
     func: async (page, kwargs) => {
         // Extract tweet ID from URL if needed.
         // Article URLs (x.com/i/article/{articleId}) use a different ID than
@@ -152,6 +153,7 @@ cli({
           const noteText = tw.note_tweet?.note_tweet_results?.result?.text;
           if (noteText) {
             return [{
+              _authorSource: user,
               title: '(Note Tweet)',
               author: screenName,
               content: noteText,
@@ -235,6 +237,8 @@ cli({
         }
 
         return [{
+          _authorSource: user,
+          _articleSource: tw.article,
           title,
           author: screenName,
           content: parts.join('\\n\\n') || legacy.full_text || '',
@@ -258,6 +262,13 @@ cli({
         if (!Array.isArray(rawResult)) {
             throw new CommandExecutionError('Twitter article response payload is malformed');
         }
-        return rawResult;
+        return rawResult.map(row => {
+            const { _authorSource, _articleSource, ...legacyRow } = row;
+            return {
+                ...legacyRow,
+                ...(_authorSource ? authorFields(_authorSource) : {}),
+                ...(_articleSource ? { article: extractArticle({ article: _articleSource }) } : {}),
+            };
+        });
     }
 });

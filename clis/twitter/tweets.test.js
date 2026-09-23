@@ -57,13 +57,13 @@ function makeTimelinePayload(startId, count, nextCursor = null) {
 }
 
 describe('twitter tweets helpers', () => {
-    it('keeps tweets command arguments and columns unchanged after transport extraction', () => {
+    it('keeps tweets arguments and adds author metadata columns', () => {
         const cmd = getRegistry().get('twitter/tweets');
         expect(cmd?.args?.map((arg) => arg.name)).toEqual([
             'username', 'limit', 'page-delay', 'top-by-engagement',
         ]);
         expect(cmd?.columns).toEqual([
-            'id', 'author', 'created_at', 'is_retweet', 'text', 'likes',
+            'id', 'author_info', 'avatar_url', 'author', 'created_at', 'is_retweet', 'text', 'likes',
             'retweets', 'replies', 'views', 'url', 'has_media', 'media_urls',
             'media_posters', 'quoted_tweet',
         ]);
@@ -72,7 +72,7 @@ describe('twitter tweets helpers', () => {
 
     it('registers id and is_retweet in the default columns', () => {
         const cmd = getRegistry().get('twitter/tweets');
-        expect(cmd?.columns).toEqual(['id', 'author', 'created_at', 'is_retweet', 'text', 'likes', 'retweets', 'replies', 'views', 'url', 'has_media', 'media_urls', 'media_posters', 'quoted_tweet']);
+        expect(cmd?.columns).toEqual(['id', 'author_info', 'avatar_url', 'author', 'created_at', 'is_retweet', 'text', 'likes', 'retweets', 'replies', 'views', 'url', 'has_media', 'media_urls', 'media_posters', 'quoted_tweet']);
     });
 
     it('makes the username argument optional so it can default to the logged-in user', () => {

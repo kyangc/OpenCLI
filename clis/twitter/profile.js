@@ -1,3 +1,4 @@
+import { authorFields } from './tweet-data.js';
 import { ArgumentError, AuthRequiredError, CommandExecutionError, EmptyResultError } from '@jackwener/opencli/errors';
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { describeTwitterApiError, normalizeTwitterScreenName, resolveTwitterOperationMetadata, unwrapBrowserResult } from './shared.js';
@@ -55,6 +56,7 @@ export function mapTwitterProfileResult(result, screenName) {
     const location = isPlainObject(result.location) ? result.location : {};
     const expandedUrl = stringField(result.website?.url) || stringField(legacy.entities?.url?.urls?.[0]?.expanded_url);
     return [{
+        ...authorFields(result),
         screen_name: stringField(core.screen_name) || stringField(legacy.screen_name) || screenName,
         name: stringField(core.name) || stringField(legacy.name),
         bio: stringField(result.profile_bio?.description) || stringField(legacy.description),
@@ -80,7 +82,7 @@ cli({
     args: [
         { name: 'username', type: 'string', positional: true, help: 'Twitter screen name (with or without @). Defaults to the logged-in user when omitted.' },
     ],
-    columns: ['screen_name', 'name', 'bio', 'location', 'url', 'followers', 'following', 'tweets', 'likes', 'verified', 'created_at'],
+    columns: ['author_info', 'avatar_url', 'screen_name', 'name', 'bio', 'location', 'url', 'followers', 'following', 'tweets', 'likes', 'verified', 'created_at'],
     func: async (page, kwargs) => {
         const rawUsername = String(kwargs.username ?? '').trim();
         let username = normalizeTwitterScreenName(rawUsername);

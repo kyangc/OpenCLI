@@ -778,6 +778,8 @@ describe('twitter extractQuotedTweet', () => {
             },
         };
         expect(extractQuotedTweet(tweet)).toEqual({
+            avatar_url: null,
+            author_info: { id: null, handle: 'alice', name: 'Alice', avatar_url: null, verification: { verified: null, type: 'unknown' } },
             id: '2040254679301718161',
             author: 'alice',
             name: 'Alice',

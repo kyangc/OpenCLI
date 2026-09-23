@@ -1,3 +1,4 @@
+import { authorFields } from './tweet-data.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { cli, Strategy } from '@jackwener/opencli/registry';
@@ -76,6 +77,7 @@ function extractLikedTweet(result, seen) {
     return {
         id: tw.rest_id,
         author: screenName,
+        ...authorFields(user),
         name: displayName,
         text: noteText || legacy.full_text || '',
         likes: legacy.favorite_count || 0,
@@ -199,7 +201,7 @@ cli({
         { name: 'max-pages', type: 'int', help: `Optional pagination safety cap (default ${DEFAULT_MAX_PAGINATION_PAGES}; raised automatically with --all).` },
         { name: 'top-by-engagement', type: 'int', default: 0, help: 'When set to N>0, re-rank the liked tweets by weighted engagement (likes×1 + retweets×3 + replies×2 + bookmarks×5 + log10(views+1)×0.5) and return the top N. Default 0 keeps the API\'s native (recency) ordering. Incompatible with --output-file.' },
     ],
-    columns: ['id', 'author', 'name', 'text', 'likes', 'retweets', 'created_at', 'url', 'has_media', 'media_urls', 'media_posters'],
+    columns: ['id', 'author_info', 'avatar_url', 'author', 'name', 'text', 'likes', 'retweets', 'created_at', 'url', 'has_media', 'media_urls', 'media_posters'],
     func: async (page, kwargs) => {
         const fetchAll = Boolean(kwargs.all);
         const limit = fetchAll ? Number.POSITIVE_INFINITY : (kwargs.limit || 20);
