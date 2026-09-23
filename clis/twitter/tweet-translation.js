@@ -1,5 +1,41 @@
 import { ArgumentError, AuthRequiredError, LoginWallError } from '@jackwener/opencli/errors';
 import { unwrapBrowserResult } from './shared.js';
+import { requestTranslation } from './tweet-translation-api.js';
+
+export function validateTranslationRelations(value = 'all') {
+    if (!['all', 'quote', 'reply', 'none'].includes(value)) throw new ArgumentError('translate-relations must be all, quote, reply or none');
+}
+
+export function translationPostIds(result, relations = 'all') {
+    validateTranslationRelations(relations);
+    const selected = new Set(), queue = [result.root_id];
+    while (queue.length) {
+        const id = queue.shift();
+        if (selected.has(id) || !result.posts[id]) continue;
+        selected.add(id);
+        for (const r of result.posts[id].relations || []) {
+            if (r.state === 'resolved' && (r.kind === 'repost' || relations === 'all' || r.kind === relations)) queue.push(r.id);
+        }
+    }
+    return selected;
+}
+
+export async function translatePostWithApi(page, post, options = {}) {
+    if (post.article || !post.text.trim() || /^zh(?:-|$)/i.test(post.lang || '')) return translatePost(page, post, options);
+    const started = Date.now();
+    let api;
+    try { api = await requestTranslation(page, post, options.deadline); }
+    catch (error) {
+        if (error instanceof AuthRequiredError || error instanceof LoginWallError) throw error;
+        api = { reason: 'translation_api_failed', fallback: true };
+    }
+    const base = { provider: 'x', target_lang: 'zh-CN', source_lang: post.lang || null, scope: 'post_text',
+        text: null, completeness: 'not_available', untranslated_fields: ['article', 'poll', 'link_card', 'media_text'], fetched_at: null };
+    if (api.text) return { ...base, status: 'translated', text: api.text, completeness: 'unknown', method: 'api',
+        fetched_at: new Date().toISOString(), duration_ms: Date.now() - started };
+    if (!api.fallback) return { ...base, status: 'unavailable', reason: api.reason, method: 'api', duration_ms: Date.now() - started };
+    return { ...await translatePost(page, post, options), method: 'dom', fallback_reason: api.reason, duration_ms: Date.now() - started };
+}
 
 export function validateTranslationTarget(target) {
     if (target !== undefined && target !== 'zh-CN') throw new ArgumentError('translate-to currently supports only zh-CN');
@@ -81,9 +117,10 @@ export async function appendTranslations(page, result, target, options = {}) {
     validateTranslationTarget(target);
     if (target === undefined) return result;
     const deadline = Date.now() + 60_000;
-    const posts = Object.values(result.posts).sort((a,b) => (a.id === result.root_id ? -1 : b.id === result.root_id ? 1 : 0));
+    const ids = options.relations === undefined ? new Set(Object.keys(result.posts)) : translationPostIds(result, options.relations);
+    const posts = Object.values(result.posts).filter(p => ids.has(p.id)).sort((a,b) => (a.id === result.root_id ? -1 : b.id === result.root_id ? 1 : 0));
     for (const post of posts) {
-        post.translation = await translatePost(page, post, { deadline, ...options });
+        post.translation = await translatePostWithApi(page, post, { deadline, ...options });
         if (post.translation.status === 'unavailable' || post.translation.completeness === 'partial') result.warnings.push({ code: 'translation_' + (post.translation.reason || 'partial'), post_id: post.id, field: 'translation' });
     }
     return result;

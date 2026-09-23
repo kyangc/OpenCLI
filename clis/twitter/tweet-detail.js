@@ -2,7 +2,7 @@ import { ArgumentError, AuthRequiredError, CommandExecutionError, LoginWallError
 import { BROWSER_JSON_SNIFF_FN, throwIfLoginWall } from '@jackwener/opencli/utils';
 import { resolveTwitterOperationMetadata, unwrapBrowserResult, extractCard } from './shared.js';
 import { TWITTER_BEARER_TOKEN } from './utils.js';
-import { appendTranslations, validateTranslationTarget } from './tweet-translation.js';
+import { appendTranslations, validateTranslationTarget, validateTranslationRelations } from './tweet-translation.js';
 import { extractPost, unwrapTweet } from './tweet-data.js';
 
 export function normalizeDetailId(value) {
@@ -73,8 +73,9 @@ export async function collectDetail(rootId, fetchTweet, { depth = 1, maxNodes = 
     return result;
 }
 
-export async function fetchDetail(page, input, depth, translateTo) {
+export async function fetchDetail(page, input, depth, translateTo, translateRelations) {
     validateTranslationTarget(translateTo);
+    validateTranslationRelations(translateRelations);
     const rootId = normalizeDetailId(input);
     if (!Number.isInteger(depth) || depth < 0 || depth > 2) throw new ArgumentError('context-depth must be 0, 1 or 2');
     const cookies = await page.getCookies({ url: 'https://x.com' });
@@ -109,7 +110,7 @@ export async function fetchDetail(page, input, depth, translateTo) {
         if (data?.error || (data?.errors?.length && !data?.data?.tweetResult?.result)) throw new CommandExecutionError('X detail request failed');
         return data?.data?.tweetResult?.result;
     }, { depth });
-    await appendTranslations(page, detail, translateTo);
+    await appendTranslations(page, detail, translateTo, { relations: translateRelations });
     if (Buffer.byteLength(JSON.stringify(detail, null, 2)) > 900_000) throw new CommandExecutionError('Translated detail exceeds output budget; use --context-depth 0');
     return detail;
 }

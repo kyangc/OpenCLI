@@ -138,7 +138,7 @@ describe('detail command transport', () => {
         const page = { getCookies: async () => [{ name: 'ct0', value: 'x' }], goto: vi.fn(), evaluate: vi.fn()
             .mockResolvedValueOnce(null)
             .mockResolvedValueOnce({ data: { tweetResult: { result: tweet('1', {full_text:'hello',lang:'en'}) } } })
-            .mockResolvedValueOnce({state:'translated',lang:'zh',text:'你好',truncated:false}) };
+            .mockResolvedValueOnce({status:200,body:JSON.stringify({result:{content_type:'POST',text:'你好',entities:{}}})}) };
         const result = await fetchDetail(page, '1', 0, 'zh-CN');
         expect(result.posts['1']).toMatchObject({text:'hello',lang:'en',translation:{text:'你好',status:'translated',source_lang:'en'}});
     });
