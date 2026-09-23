@@ -116,7 +116,7 @@ export function extractPost(value) {
     add('repost', l.retweeted_status_id_str, tw.retweeted_status_result?.result ?? l.retweeted_status_result?.result);
     return { id: tw.rest_id, url: `https://x.com/${author.handle || 'i'}/status/${tw.rest_id}`, author,
         text: hasNote ? note.text : typeof l.full_text === 'string' ? l.full_text : '',
-        text_source: hasNote ? 'note' : 'legacy',
+        text_source: hasNote ? 'note' : 'legacy', lang: str(l.lang),
         // Preserve provider indices; callers must validate offsets before using them.
         entity_index_unit: 'provider', entities: textEntities(hasNote ? note.entity_set : l.entities),
         richtext: array(note?.richtext?.richtext_tags).map(r => ({ from_index: count(r?.from_index), to_index: count(r?.to_index), types: array(r?.richtext_types).filter(t => typeof t === 'string') })),

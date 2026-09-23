@@ -2,6 +2,7 @@ import { ArgumentError, AuthRequiredError, CommandExecutionError, LoginWallError
 import { BROWSER_JSON_SNIFF_FN, throwIfLoginWall } from '@jackwener/opencli/utils';
 import { resolveTwitterOperationMetadata, unwrapBrowserResult, extractCard } from './shared.js';
 import { TWITTER_BEARER_TOKEN } from './utils.js';
+import { appendTranslations, validateTranslationTarget } from './tweet-translation.js';
 import { extractPost, unwrapTweet } from './tweet-data.js';
 
 export function normalizeDetailId(value) {
@@ -72,7 +73,8 @@ export async function collectDetail(rootId, fetchTweet, { depth = 1, maxNodes = 
     return result;
 }
 
-export async function fetchDetail(page, input, depth) {
+export async function fetchDetail(page, input, depth, translateTo) {
+    validateTranslationTarget(translateTo);
     const rootId = normalizeDetailId(input);
     if (!Number.isInteger(depth) || depth < 0 || depth > 2) throw new ArgumentError('context-depth must be 0, 1 or 2');
     const cookies = await page.getCookies({ url: 'https://x.com' });
@@ -87,7 +89,7 @@ export async function fetchDetail(page, input, depth) {
         }, fieldToggles: { withArticleRichContentState: true, withArticlePlainText: true },
     });
     const deadline = Date.now() + 90_000;
-    return collectDetail(rootId, async tweetId => {
+    const detail = await collectDetail(rootId, async tweetId => {
         const remaining = deadline - Date.now();
         if (remaining <= 0) throw new CommandExecutionError('Tweet detail request budget exhausted');
         const url = '/i/api/graphql/' + op.queryId + '/TweetResultByRestId?' + new URLSearchParams({
@@ -107,4 +109,7 @@ export async function fetchDetail(page, input, depth) {
         if (data?.error || (data?.errors?.length && !data?.data?.tweetResult?.result)) throw new CommandExecutionError('X detail request failed');
         return data?.data?.tweetResult?.result;
     }, { depth });
+    await appendTranslations(page, detail, translateTo);
+    if (Buffer.byteLength(JSON.stringify(detail, null, 2)) > 900_000) throw new CommandExecutionError('Translated detail exceeds output budget; use --context-depth 0');
+    return detail;
 }
