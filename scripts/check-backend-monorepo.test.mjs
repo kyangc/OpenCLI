@@ -74,9 +74,11 @@ test('backend image verification and fork release both gate on the provider-neut
     readFile(path.join(repositoryRoot, '.github/workflows/kyangc-release.yml'), 'utf8'),
   ]);
 
+  const cliVersion = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8')).version;
+  const extensionVersion = JSON.parse(await readFile(path.join(repositoryRoot, 'extension/package.json'), 'utf8')).version;
   for (const workflow of [backendWorkflow, releaseWorkflow]) {
     assert.match(workflow, /--target backend --tag local\/opencli-backend:2\.1\.0\.1/);
     assert.match(workflow, /--target chromium --tag local\/opencli-chromium:2\.0\.0\.1/);
-    assert.match(workflow, /services\/opencli-backend\/scripts\/smoke-compose\.sh 2\.0\.4 2\.0\.0/);
+    assert.ok(workflow.includes(`services/opencli-backend/scripts/smoke-compose.sh ${cliVersion} ${extensionVersion}`), 'Compose smoke must check the versions being released');
   }
 });

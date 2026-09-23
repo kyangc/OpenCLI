@@ -58,6 +58,40 @@ unverified/unknown where evidence is absent.
   succeeded through the ordinary agent API for post `20`, confirming the
   queue, persisted login and browser execution chain before promotion.
 
-Candidate/live detail acceptance and final deployment evidence will be recorded
-alongside the stable promotion. These automated checks do not establish poster
-rendering or iPhone Shortcut acceptance.
+## NAS candidate acceptance
+
+Candidate image `local/opencli-backend:2.1.0.1` was built from the candidate
+checkout and tested with the existing persistent state. The queue was paused
+and drained before replacement, then resumed. Deployment smoke passed with
+CLI/daemon 2.1.0, extension 2.0.0, one connected profile, zero pending browser
+commands and zero active/queued jobs. The ordinary agent catalog exposes the
+read-only `twitter.detail` command and structured parameters.
+
+All jobs below used the Backend HTTP API and completed without truncation:
+
+| Shape | Post | Job | Observed result |
+|---|---|---|---|
+| Plain + share URL | 20 | 30bf985d-c5b9-480a-93be-6455cce2cd61 | Exact root, author/avatar, text, metrics |
+| Reply depth 2 | 2096847737153012204 | ad91132e-33eb-40f2-a891-60a1dc498a05 | Three posts with distinct authors/avatars; depth boundary explicit |
+| Four photos | 2041557036274475228 | 90157139-ea99-4443-a26a-7b8b35aaca9a | Ordered images, dimensions and alt text |
+| Video | 2041690396586090592 | 34f52178-f0df-4595-9403-2a7a110b80a8 | Preview JPEG, variants, 720x405, 99699 ms |
+| Poll | 1593767953706921985 | d04de292-1a9e-43bb-8472-c748bc7a8f99 | Two options, 15085458 total votes, end time |
+| Note + quote | 2097375276384567642 | c35b09cc-2808-4710-a505-a815e260badb | 555-character Note plus resolved 451-character quoted Note |
+| Article | 2102341632452411524 | 5c6dc080-d5c8-4796-a2df-4451c8d3fbd3 | 58 blocks, 4 media, 13 entities; unsupported content marked partial |
+
+NAS downloads of the photo/video authors' avatars and first previews returned
+HTTP 206 with image/jpeg and JPEG magic bytes (bounded 64 KiB reads). Existing
+`twitter.search` also returned additive avatars and independent quoted-author
+metadata. An unavailable sample (1594005989316083712) correctly failed rather
+than returning an empty success.
+
+GIF, mixed-media and repost mapping are covered by synthetic tests, not live
+acceptance. Article completeness remains partial/unknown, and provider text
+indices have not been certified across every Unicode shape. These results do
+not establish poster rendering or iPhone Shortcut acceptance.
+
+The promotion PR targets `stable`; `main` is not changed. CI includes the
+Backend container/Compose smoke and a manually dispatched headed-browser gate,
+which also runs isolated fixed-port transport tests on all three operating
+systems without disconnecting the user's local browser extension.
+
