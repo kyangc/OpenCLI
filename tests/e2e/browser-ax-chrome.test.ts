@@ -20,6 +20,7 @@ type Command = {
   action: string;
   session?: string;
   surface?: 'browser' | 'adapter';
+  siteSession?: 'ephemeral' | 'persistent';
   page?: string;
   url?: string;
   code?: string;
@@ -286,6 +287,8 @@ function launchChrome(chromePath: string, userDataDir: string, startUrl: string)
     `--disable-extensions-except=${EXTENSION_DIR}`,
     `--load-extension=${EXTENSION_DIR}`,
     '--disable-features=DisableLoadExtensionCommandLineSwitch',
+    // Disposable profiles must not request access to the user's login keychain.
+    ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
     '--enable-unsafe-extension-debugging',
     '--host-resolver-rules=MAP a.opencli.test 127.0.0.1,MAP b.opencli.test 127.0.0.1',
     '--site-per-process',
@@ -413,7 +416,9 @@ describe('Browser Bridge AX real Chrome smoke', () => {
 
   it.each([false, true])('navigates slow adapter pages once with network capture=%s', async (capture) => {
     if (skipReason) throw new Error(skipReason);
-    const session = { session: `navigation-${capture}`, surface: 'adapter' as const };
+    // This probe deliberately reuses its session after close-window. Ephemeral
+    // operations are terminal after closing and are covered by the lifecycle E2E.
+    const session = { session: `navigation-${capture}`, surface: 'adapter' as const, siteSession: 'persistent' as const };
     const command = async (cmd: Omit<Command, 'id'>) => {
       const result = await bridge!.sendCommand({ ...cmd, ...session });
       expect(result.ok, result.error).toBe(true);

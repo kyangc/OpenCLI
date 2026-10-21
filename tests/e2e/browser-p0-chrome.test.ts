@@ -82,6 +82,8 @@ beforeAll(async () => {
   daemon.stderr?.on('data',chunk => {stderr += chunk;});
   await until(async () => (await fetch(`http://127.0.0.1:${port}/ping`)).ok,'daemon');
   chrome = spawn(executable,[`--user-data-dir=${path.join(temp,'profile')}`,`--disable-extensions-except=${extension}`,`--load-extension=${extension}`,
+    // Disposable profiles must not request access to the user's login keychain.
+    ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
     '--headless=new','--no-sandbox','--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-sync','about:blank'],{stdio:['ignore','ignore','pipe']});
   chrome.stderr?.on('data',chunk => {stderr = (stderr+chunk).slice(-10_000);});
   await until(async () => (await (await fetch(`http://127.0.0.1:${port}/status`,{headers:{'X-OpenCLI':'1'}})).json() as any).extensionConnected,'extension');

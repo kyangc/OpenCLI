@@ -166,6 +166,8 @@ describe('site slot pool — real Chrome', () => {
       `--disable-extensions-except=${ext}`,
       `--load-extension=${ext}`,
       '--disable-features=DisableLoadExtensionCommandLineSwitch',
+      // Disposable profiles must not request access to the user's login keychain.
+      ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
       '--no-first-run', '--no-default-browser-check', '--disable-sync', '--no-sandbox',
       '--disable-background-networking', '--disable-component-update',
       '--window-size=1280,720',

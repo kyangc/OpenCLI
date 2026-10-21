@@ -154,6 +154,8 @@ function launchChrome(chromePath: string, userDataDir: string): ChildProcess {
     `--disable-extensions-except=${EXTENSION_DIR}`,
     `--load-extension=${EXTENSION_DIR}`,
     '--disable-features=DisableLoadExtensionCommandLineSwitch',
+    // Disposable profiles must not request access to the user's login keychain.
+    ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
     '--enable-unsafe-extension-debugging',
     '--no-first-run',
     '--no-default-browser-check',

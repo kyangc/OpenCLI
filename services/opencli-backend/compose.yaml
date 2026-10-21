@@ -6,7 +6,7 @@ x-opencli-build: &opencli-build
 
 services:
   chromium:
-    image: local/opencli-chromium:2.0.0.1
+    image: local/opencli-chromium:2.1.0.1
     build:
       <<: *opencli-build
       target: chromium
@@ -43,7 +43,7 @@ services:
     restart: unless-stopped
 
   backend:
-    image: local/opencli-backend:2.2.4.1
+    image: local/opencli-backend:3.0.0.1
     build:
       <<: *opencli-build
       target: backend
