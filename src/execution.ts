@@ -254,6 +254,7 @@ export async function executeCommand(
   try {
     if (siteSession !== null) {
       const BrowserFactory = getBrowserFactory();
+      const usesBrowserBridge = !process.env.OPENCLI_CDP_ENDPOINT;
       // Requirement vs preference: --profile / OPENCLI_PROFILE route strictly;
       // the config default is a soft preference the daemon arbitrates.
       const profileSelection = resolveProfileSelection(opts.profile);
@@ -268,7 +269,7 @@ export async function executeCommand(
       // Chrome tab. The runId flows to the daemon on every command (acquire +
       // heartbeat); we release it explicitly when the command settles. Read and
       // ephemeral commands are never leased.
-      let leaseRun = siteSession === 'persistent' && cmd.access === 'write'
+      let leaseRun = usesBrowserBridge && siteSession === 'persistent' && cmd.access === 'write'
         ? { runId: generateRunId(), session }
         : null;
       let slotWaitedSec = 0;
@@ -309,7 +310,7 @@ export async function executeCommand(
       let adapterRun = null as Promise<unknown> | null;
       try {
       result = await browserSession(BrowserFactory, async (page) => {
-        const outcome = await operation.execute(async () => {
+        const runInBrowser = async () => {
         const observation = traceMode === 'off'
           ? null
           : new ObservationSession({
@@ -430,7 +431,12 @@ export async function executeCommand(
           }
           throw err;
         }
-        }, { retain: keepTab });
+        };
+        // Direct CDP borrows the caller's target and has no daemon-owned lease.
+        // browserSession closes that connection; extension teardown applies only
+        // to Browser Bridge operations, including on adapter failure.
+        if (!usesBrowserBridge) return runInBrowser();
+        const outcome = await operation.execute(runInBrowser, { retain: keepTab });
         return outcome.result;
       }, { session, ...profileRouting, windowMode, surface: 'adapter', siteSession, access: cmd.access });
       } catch (err) {

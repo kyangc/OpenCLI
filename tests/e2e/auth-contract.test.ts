@@ -1,6 +1,9 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { JSDOM } from 'jsdom';
 import { WebSocketServer } from 'ws';
@@ -14,6 +17,7 @@ const anonymous = { ResponseStatus: { Ack: 'Failure', Errors: [{ ErrorCode: 'Acc
 // Run the shipped CLI, lazy adapter loader, browser transport, real probe JS,
 // output formatter and exit-code mapping. Only the remote site is a fixture.
 async function runWithSite(args: string[], payload: unknown, status = 200) {
+  const home = await mkdtemp(join(tmpdir(), 'opencli-auth-contract-'));
   const dom = new JSDOM('<!doctype html><body></body>', { url: 'https://www.ctrip.com/', runScripts: 'outside-only', pretendToBeVisual: true });
   const requests: string[] = [];
   dom.window.fetch = (async (url: string) => {
@@ -40,7 +44,7 @@ async function runWithSite(args: string[], payload: unknown, status = 200) {
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Missing fixture address');
   const child = spawn(process.execPath, ['dist/src/main.js', ...args], {
-    cwd: root, env: { ...process.env, OPENCLI_CDP_ENDPOINT: `ws://127.0.0.1:${address.port}`, NO_COLOR: '1' },
+    cwd: root, env: { ...process.env, HOME: home, OPENCLI_CDP_ENDPOINT: `ws://127.0.0.1:${address.port}`, NO_COLOR: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '', stderr = '';
@@ -55,6 +59,7 @@ async function runWithSite(args: string[], payload: unknown, status = 200) {
     for (const ws of server.clients) ws.terminate();
     await new Promise<void>(resolve => server.close(() => resolve()));
     dom.window.close();
+    await rm(home, { recursive: true, force: true });
   }
 }
 

@@ -37,7 +37,7 @@
 - 浏览器测试按 manifest 查找带版本的 worker；operation fixture 只终止自己创建的
   daemon，避免测试初始化失败后关闭正在运行的用户 daemon。
 
-## 本地验证与边界
+## 首次合并时的验证与边界
 
 - TypeScript、CLI build、扩展 typecheck/build/package 通过。
 - unit / extension / adapter：543 个文件、6474 个测试通过。
@@ -47,3 +47,21 @@
 - 未运行会占用固定端口的 daemon E2E、真实登录站点或 Linux headed Chrome gate。
   CI、容器构建及部署验收仍属于后续发布流程。
 - 本次只更新本地分支，没有 push、发布 tag/release、替换已安装 CLI 或重载扩展。
+
+## 浏览器 E2E 与部署补丁
+
+真实 Chrome for Testing 148 E2E 的 15 个用例通过，包含实际 CLI 到 daemon、
+扩展、Chrome 的链路、操作取消后的物理窗口清理、AX、上传、流式输出和 site slots。
+测试使用隔离 HOME、profile、runtime 与端口，保留用户运行中的浏览器。
+macOS fixture 增加 mock keychain，AX 导航 fixture 明确使用 persistent session。
+
+推送后的 Linux CI 暴露出 full auth status 的 direct CDP 临时会话清理问题，
+本地同样复现。direct CDP 借用调用方已有 target，不拥有扩展端 operation/lease；
+现在由 browserSession 关闭 CDP 连接，不再调用 daemon 的 operation-cancel 或
+lease-release。Browser Bridge 的 verified teardown 保持原有行为。
+新增 direct CDP 的成功/失败、ephemeral/persistent 回归，并隔离 auth E2E 的 HOME。
+CLI 补丁版本为 3.0.1，扩展继续使用 2.1.0；backend 镜像为 3.0.1.1。
+
+部署范围为本机、两台 Mac mini 和 NAS。升级保留旧 runtime、镜像、扩展与 NAS
+profile/state/data 快照，待各机实际 daemon/extension 连接及浏览器读取验收完成后记录结果。
+东航采集按用户要求保持停用，不恢复调度或重放未知结果请求。

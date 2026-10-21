@@ -542,6 +542,25 @@ describe('executeCommand — non-browser timeout', () => {
     vi.restoreAllMocks();
   });
 
+  it.each(['ephemeral', 'persistent'] as const)('does not contact the daemon for direct CDP %s commands', async (siteSession) => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:12345');
+    vi.spyOn(capRouting, 'shouldUseBrowserSession').mockReturnValue(true);
+    vi.spyOn(runtime, 'browserSession').mockImplementation(async (_Factory, fn) => fn({} as any));
+    const release = vi.spyOn(daemonClient, 'releaseSiteSessionLease').mockResolvedValue(undefined);
+    const cmd = cli({
+      site: 'test-execution', name: `direct-cdp-${siteSession}`, access: 'write',
+      description: 'Direct CDP does not own extension leases',
+      browser: true, strategy: Strategy.PUBLIC, siteSession,
+      func: async () => [{ value: 'ok' }],
+    });
+    await expect(executeCommand(cmd, {})).resolves.toEqual([{ value: 'ok' }]);
+    const failure = new Error('site unavailable');
+    cmd.func = async () => { throw failure; };
+    await expect(executeCommand(cmd, {})).rejects.toBe(failure);
+    expect(BrowserOperation.prototype.execute).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+  });
+
   it('lets env ephemeral override persistent metadata and closes the window on failure', async () => {
     const closeWindow = vi.fn().mockResolvedValue(undefined);
     const mockPage = { closeWindow } as any;
