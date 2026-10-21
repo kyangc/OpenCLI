@@ -11,6 +11,10 @@
 npm install -g @jackwener/opencli
 ```
 
+## Install the Browser Bridge Extension
+
+For browser commands, install **OpenCLI** from the [Chrome Web Store](https://chromewebstore.google.com/detail/opencli/ildkmabpimmkaediidaifkhjpohdnifk) (recommended). See [Browser Bridge setup](./browser-bridge) for manual installation and verification.
+
 ## Install from Source
 
 ```bash
@@ -37,8 +41,6 @@ Or refresh only the skills you actually use:
 npx skills add jackwener/opencli --skill opencli-adapter-author
 npx skills add jackwener/opencli --skill opencli-autofix
 npx skills add jackwener/opencli --skill opencli-browser
-npx skills add jackwener/opencli --skill opencli-browser-sitemap
-npx skills add jackwener/opencli --skill opencli-sitemap-author
 npx skills add jackwener/opencli --skill opencli-usage
 npx skills add jackwener/opencli --skill smart-search
 ```

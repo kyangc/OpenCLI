@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "OpenCLI",
-  "version": "2.0.0",
-  "version_name": "kyangc-ext-v2.0.0",
+  "version": "2.1.0",
+  "version_name": "kyangc-ext-v2.1.0",
   "description": "Browser automation bridge for the OpenCLI CLI tool. Executes commands in Chrome tab leases via a local daemon.",
   "permissions": [
     "debugger",
@@ -18,7 +18,7 @@
     "<all_urls>"
   ],
   "background": {
-    "service_worker": "dist/background-2.0.0.js",
+    "service_worker": "dist/background-2.1.0.js",
     "type": "module"
   },
   "icons": {

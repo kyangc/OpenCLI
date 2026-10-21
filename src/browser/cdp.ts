@@ -1,5 +1,5 @@
 /**
- * CDP client — implements IPage by connecting directly to a Chrome/Electron CDP WebSocket.
+ * CDP client — implements IPage by connecting directly to a Chrome CDP WebSocket.
  *
  * Fixes applied:
  * - send() now has a 30s timeout guard (P0 #4)
@@ -11,13 +11,14 @@
 import { WebSocket, type RawData } from 'ws';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { readFileSync, statSync } from 'node:fs';
 import type { BrowserCookie, BrowserEvaluateFunction, IPage, ScreenshotOptions } from '../types.js';
 import type { BrowserCommandAccess, IBrowserFactory } from '../runtime.js';
 import { buildEvaluateExpression } from './utils.js';
 import { generateStealthJs } from './stealth.js';
 import { waitForDomStableJs } from './dom-helpers.js';
 import { isRecord, saveBase64ToFile } from '../utils.js';
-import { getAllElectronApps } from '../electron-apps.js';
+import { CommandExecutionError } from '../errors.js';
 import { CDPBasePage } from './base-page.js';
 
 export interface CDPTarget {
@@ -49,6 +50,8 @@ export const CDP_RESPONSE_BODY_CAPTURE_LIMIT = 8 * 1024 * 1024;
 export const CDP_REQUEST_BODY_CAPTURE_LIMIT = 1 * 1024 * 1024;
 
 type NetworkCaptureEntry = {
+  requestId: string;
+  captureComplete?: boolean;
   url: string;
   method: string;
   responseStatus?: number;
@@ -84,6 +87,13 @@ export class CDPBridge implements IBrowserFactory {
     const endpoint = opts?.cdpEndpoint ?? process.env.OPENCLI_CDP_ENDPOINT;
     if (!endpoint) throw new Error('CDP endpoint not provided (pass cdpEndpoint or set OPENCLI_CDP_ENDPOINT)');
 
+    // Validate before connecting: reading a FIFO synchronously could block forever.
+    const initPath = process.env.OPENCLI_CDP_INIT_SCRIPT;
+    if (initPath && !statSync(initPath).isFile()) {
+      throw new Error('OPENCLI_CDP_INIT_SCRIPT must point to a regular JavaScript file');
+    }
+    const initSource = initPath ? readFileSync(initPath, 'utf8') : undefined;
+
     let wsUrl = endpoint;
     if (endpoint.startsWith('http')) {
       const targets = await fetchJsonDirect(`${endpoint.replace(/\/$/, '')}/json`) as CDPTarget[];
@@ -109,6 +119,8 @@ export class CDPBridge implements IBrowserFactory {
         try {
           await this.send('Page.enable');
           await this.send('Page.addScriptToEvaluateOnNewDocument', { source: generateStealthJs() });
+          // Optional caller script for every new document, e.g. state a headless peer cannot share across connections.
+          if (initSource !== undefined) await this.send('Page.addScriptToEvaluateOnNewDocument', { source: initSource });
         } catch (err) {
           ws.close();
           reject(err instanceof Error ? err : new Error(String(err)));
@@ -253,9 +265,21 @@ class CDPPage extends CDPBasePage {
     return result.result?.value;
   }
 
+  /** Direct CDP evaluation has no replay/retry path. */
+  async evaluateOnce<T = unknown>(js: string): Promise<T> {
+    return this.evaluate<T>(js);
+  }
+
   async getCookies(opts: { domain?: string; url?: string } = {}): Promise<BrowserCookie[]> {
-    const result = await this.bridge.send('Network.getCookies', opts.url ? { urls: [opts.url] } : {});
-    const cookies = isRecord(result) && Array.isArray(result.cookies) ? result.cookies : [];
+    // Network.getCookies without URLs is scoped to the current page, which may
+    // be on another site during a no-navigation auth check.
+    const result = opts.url
+      ? await this.bridge.send('Network.getCookies', { urls: [opts.url] })
+      : await this.bridge.send('Storage.getCookies', {});
+    if (!isRecord(result) || !Array.isArray(result.cookies) || !result.cookies.every(isCookie)) {
+      throw new CommandExecutionError('CDP returned an invalid cookies response');
+    }
+    const cookies = result.cookies;
     const domain = opts.domain;
     return domain
       ? cookies.filter((cookie): cookie is BrowserCookie => isCookie(cookie) && matchesCookieDomain(cookie.domain, domain))
@@ -340,15 +364,15 @@ class CDPPage extends CDPBasePage {
           };
           timestamp: number;
         };
+        // Redirect hops reuse the request ID. Keep the original request/body
+        // and settle it from the final response instead of retaining an orphan.
+        if (this._pendingRequests.has(p.requestId)) return;
         if (!this._networkCapturePattern || p.request.url.includes(this._networkCapturePattern)) {
-          // Redirect hops reuse the same CDP requestId. Keep the original
-          // request record (including its POST body) and let final response
-          // events complete that stable record.
-          if (this._pendingRequests.has(p.requestId)) return;
           const rawBody = typeof p.request.postData === 'string' ? p.request.postData : '';
           const bodyTruncated = rawBody.length > CDP_REQUEST_BODY_CAPTURE_LIMIT;
           const record: NetworkCaptureRecord = {
             entry: {
+              requestId: p.requestId,
               url: p.request.url,
               method: p.request.method,
               requestHeaders: Object.fromEntries(
@@ -450,18 +474,20 @@ class CDPPage extends CDPBasePage {
     return true;
   }
 
-  async readNetworkCapture(): Promise<unknown[]> {
-    const completed: NetworkCaptureEntry[] = [];
+  async readNetworkCapture(options: { retainIncomplete?: boolean } = {}): Promise<unknown[]> {
+    // Keep the fork's nonblocking completed-only default. Retaining reads expose
+    // snapshots for upstream consumers without losing delayed request/body data.
+    const entries: NetworkCaptureEntry[] = [];
     const pending: NetworkCaptureRecord[] = [];
     for (const record of this._networkEntries) {
-      if (record.networkTerminal && record.pendingBodyFetches === 0) {
-        completed.push(record.entry);
-      } else {
-        pending.push(record);
+      const captureComplete = record.networkTerminal && record.pendingBodyFetches === 0;
+      if (captureComplete || options.retainIncomplete) {
+        entries.push({ ...record.entry, captureComplete });
       }
+      if (!captureComplete) pending.push(record);
     }
     this._networkEntries = pending;
-    return completed;
+    return entries;
   }
 
   async consoleMessages(level: string = 'all'): Promise<Array<{ type: string; text: string; timestamp: number }>> {
@@ -516,41 +542,15 @@ function matchesCookieDomain(cookieDomain: string, targetDomain: string): boolea
   const normalizedCookieDomain = cookieDomain.replace(/^\./, '').toLowerCase();
   const normalizedTargetDomain = targetDomain.replace(/^\./, '').toLowerCase();
   return normalizedTargetDomain === normalizedCookieDomain
-    || normalizedTargetDomain.endsWith(`.${normalizedCookieDomain}`);
+    || normalizedCookieDomain.endsWith(`.${normalizedTargetDomain}`);
 }
 
 function selectCDPTarget(targets: CDPTarget[]): CDPTarget | undefined {
   const preferredPattern = compilePreferredPattern(process.env.OPENCLI_CDP_TARGET);
-
-  const candidates = targets
+  return targets
     .map((target, index) => ({ target, index, score: scoreCDPTarget(target, preferredPattern) }))
-    .filter(({ score }) => Number.isFinite(score));
-
-  // Electron apps route auxiliary windows onto the main document through a
-  // query: Codex ships its avatar overlay as
-  // `app://-/index.html?initialRoute=%2Favatar-overlay`, which answers `/json`
-  // first and scores exactly like the main window, so document order used to
-  // send every command to a surface with no app UI (#2242). Only break that
-  // tie; a routed window that outscores its plain sibling is still the better
-  // target, and on http(s) a query is ordinary page state.
-  const plainDocuments = new Set<string>();
-  for (const { target } of candidates) {
-    const url = parseLocalDocumentUrl(target.url);
-    if (url && !url.search) plainDocuments.add(toDocumentKey(url));
-  }
-
-  const ranked = candidates
-    .map((entry) => {
-      const url = parseLocalDocumentUrl(entry.target.url);
-      return { ...entry, routed: !!url && !!url.search && plainDocuments.has(toDocumentKey(url)) };
-    })
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      if (a.routed !== b.routed) return a.routed ? 1 : -1;
-      return a.index - b.index;
-    });
-
-  return ranked[0]?.target;
+    .filter(({ score }) => Number.isFinite(score))
+    .sort((a, b) => b.score - a.score || a.index - b.index)[0]?.target;
 }
 
 function scoreCDPTarget(target: CDPTarget, preferredPattern?: RegExp): number {
@@ -563,61 +563,24 @@ function scoreCDPTarget(target: CDPTarget, preferredPattern?: RegExp): number {
 
   if (!haystack.trim() && !type) return Number.NEGATIVE_INFINITY;
   if (haystack.includes('devtools')) return Number.NEGATIVE_INFINITY;
+  // Chrome exposes browser UI targets (e.g. the toolbar) alongside real tabs.
+  // They cannot be navigated and must never outrank an about:blank page.
+  if (/^chrome(?:-untrusted)?:\/\/[^/]*\.top-chrome(?:\/|$)/.test(url)) return Number.NEGATIVE_INFINITY;
   if (type === 'background_page' || type === 'service_worker') return Number.NEGATIVE_INFINITY;
 
   let score = 0;
 
   if (preferredPattern && preferredPattern.test(haystack)) score += 1000;
 
-  if (type === 'app') score += 120;
-  else if (type === 'webview') score += 100;
-  else if (type === 'page') score += 80;
+  if (type === 'page') score += 80;
   else if (type === 'iframe') score += 20;
 
-  if (url.startsWith('http://localhost') || url.startsWith('https://localhost')) score += 90;
-  if (url.startsWith('file://')) score += 60;
-  if (url.startsWith('http://127.0.0.1') || url.startsWith('https://127.0.0.1')) score += 50;
   if (url.startsWith('about:blank')) score -= 120;
   if (url === '' || url === 'about:blank') score -= 40;
 
   if (title && title !== 'devtools') score += 25;
 
-  // Boost score for known Electron app names from the registry (builtin + user-defined)
-  const appNames = Object.values(getAllElectronApps()).map(a => (a.displayName ?? a.processName).toLowerCase());
-  for (const name of appNames) {
-    if (title.includes(name)) { score += 120; break; }
-  }
-  for (const name of appNames) {
-    if (url.includes(name)) { score += 100; break; }
-  }
-
   return score;
-}
-
-// Keep this explicit: these are the schemes Electron serves a shared local
-// document over, where a query is a window route (#2242). A "not http(s)"
-// check would also sweep in schemes we know nothing about.
-const LOCAL_DOCUMENT_SCHEMES = new Set(['app:', 'file:']);
-
-/**
- * Parse a URL that names a local app document eligible for routed-window
- * demotion (#2242).
- *
- * Only allowlisted schemes qualify: on http(s), and on any scheme we cannot
- * vouch for, a query is ordinary page state, so returning null there keeps
- * plain document-order selection.
- */
-function parseLocalDocumentUrl(raw: string | undefined): URL | null {
-  try {
-    const url = new URL(raw ?? '');
-    return LOCAL_DOCUMENT_SCHEMES.has(url.protocol) ? url : null;
-  } catch {
-    return null;
-  }
-}
-
-function toDocumentKey(url: URL): string {
-  return `${url.protocol}//${url.host}${url.pathname}`;
 }
 
 function compilePreferredPattern(raw: string | undefined): RegExp | undefined {

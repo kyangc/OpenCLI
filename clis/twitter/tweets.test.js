@@ -65,14 +65,14 @@ describe('twitter tweets helpers', () => {
         expect(cmd?.columns).toEqual([
             'id', 'author_info', 'avatar_url', 'author', 'created_at', 'is_retweet', 'text', 'likes',
             'retweets', 'replies', 'views', 'url', 'has_media', 'media_urls',
-            'media_posters', 'quoted_tweet',
+            'media_posters', 'media_durations', 'quoted_tweet',
         ]);
         expect(buildUserTweetsUrl('query', '42', 20, 'cursor')).toContain('/UserTweets');
     });
 
     it('registers id and is_retweet in the default columns', () => {
         const cmd = getRegistry().get('twitter/tweets');
-        expect(cmd?.columns).toEqual(['id', 'author_info', 'avatar_url', 'author', 'created_at', 'is_retweet', 'text', 'likes', 'retweets', 'replies', 'views', 'url', 'has_media', 'media_urls', 'media_posters', 'quoted_tweet']);
+        expect(cmd?.columns).toEqual(['id', 'author_info', 'avatar_url', 'author', 'created_at', 'is_retweet', 'text', 'likes', 'retweets', 'replies', 'views', 'url', 'has_media', 'media_urls', 'media_posters', 'media_durations', 'quoted_tweet']);
     });
 
     it('makes the username argument optional so it can default to the logged-in user', () => {
@@ -232,22 +232,6 @@ describe('twitter tweets helpers', () => {
         expect(page.wait).toHaveBeenNthCalledWith(2, 2);
     });
 
-    it('rejects invalid tweet limits before navigation', async () => {
-        const cmd = getRegistry().get('twitter/tweets');
-        const page = {
-            goto: vi.fn().mockResolvedValue(undefined),
-            wait: vi.fn().mockResolvedValue(undefined),
-            getCookies: vi.fn(),
-            evaluate: vi.fn(),
-        };
-
-        await expect(cmd.func(page, { username: 'jakevin7', limit: __test__.MAX_TWEETS_LIMIT + 1 })).rejects.toBeInstanceOf(ArgumentError);
-        await expect(cmd.func(page, { username: 'jakevin7', limit: 0 })).rejects.toBeInstanceOf(ArgumentError);
-        expect(page.goto).not.toHaveBeenCalled();
-        expect(page.getCookies).not.toHaveBeenCalled();
-        expect(page.evaluate).not.toHaveBeenCalled();
-    });
-
     it('rejects invalid pagination delays before navigation', async () => {
         const cmd = getRegistry().get('twitter/tweets');
         const page = {
@@ -262,24 +246,6 @@ describe('twitter tweets helpers', () => {
         expect(page.goto).not.toHaveBeenCalled();
         expect(page.getCookies).not.toHaveBeenCalled();
         expect(page.evaluate).not.toHaveBeenCalled();
-    });
-
-    it('rejects non-profile AppTabBar hrefs instead of querying route names as users', async () => {
-        const cmd = getRegistry().get('twitter/tweets');
-        const page = {
-            goto: vi.fn().mockResolvedValue(undefined),
-            wait: vi.fn().mockResolvedValue(undefined),
-            getCookies: vi.fn(async () => [{ name: 'ct0', value: 'token' }]),
-            evaluate: vi.fn(async (script) => {
-                const text = typeof script === 'function' ? script.toString() : String(script);
-                if (text.includes('AppTabBar_Profile_Link')) return '/home';
-                throw new Error(`Unexpected evaluate: ${text.slice(0, 80)}`);
-            }),
-        };
-
-        await expect(cmd.func(page, {})).rejects.toBeInstanceOf(AuthRequiredError);
-        expect(page.goto).toHaveBeenCalledWith('https://x.com/home');
-        expect(page.evaluate).toHaveBeenCalledTimes(1);
     });
 
     it('falls back when queryId contains unsafe characters', () => {

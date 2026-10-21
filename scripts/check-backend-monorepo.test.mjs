@@ -23,6 +23,22 @@ test('backend consumes the OpenCLI catalog from the same checkout through the CL
   assert.ok(catalog.size > 0);
   assert.equal(catalog.hasWriteCommands, false);
   assert.equal(catalog.describe('hackernews', 'top')?.access, 'read');
+  const searchNotes = catalog.describe('xiaohongshu', 'search-notes');
+  assert.equal(searchNotes?.browser, true);
+  assert.ok(searchNotes.args.some((arg) => arg.name === 'query' && arg.positional));
+});
+
+test('backend projects an actual built CLI success envelope to the existing result contract', async () => {
+  const backendRoot = path.join(repositoryRoot, 'services/opencli-backend/src');
+  const { classifyExecution } = await import(pathToFileURL(path.join(backendRoot, 'executor.mjs')));
+  const { jobResult } = await import(pathToFileURL(path.join(backendRoot, 'job-view.mjs')));
+  const { stdout, stderr } = await execFileAsync(opencliBinary, ['yollomi', 'models', '--type', 'image', '-f', 'json']);
+  assert.equal(JSON.parse(stdout).ok, true);
+  const job = classifyExecution({ stdout, stderr, exitCode: 0, durationMs: 0, outputTruncated: false }, { access: 'read' });
+  const result = jobResult(job);
+  assert.equal(result.status, 'succeeded');
+  assert.ok(Array.isArray(result.output) && result.output.length > 0);
+  assert.ok(result.output.every((model) => model.type === 'image'));
 });
 
 test('backend images build from the current checkout without a second OpenCLI source authority', async () => {

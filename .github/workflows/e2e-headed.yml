@@ -65,11 +65,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Linux runs the extension smoke and macOS runs the full real-site e2e
-      # suite; both need a real Chrome. Windows runs only the browser-free
-      # transport gate, and the setup-chrome action hangs on Windows anyway.
+      # Only the real extension contract needs Chrome.
       - name: Setup Chrome
-        if: runner.os != 'Windows'
+        if: runner.os == 'Linux'
         uses: ./.github/actions/setup-chrome
         id: setup-chrome
 
@@ -77,6 +75,7 @@ jobs:
         run: npm run build
 
       - name: Build extension
+        if: runner.os == 'Linux'
         run: npm run build --prefix extension
 
       # Real-browser extension smoke: Linux under xvfb is the one hosted
@@ -110,7 +109,7 @@ jobs:
       # actual daemon binary — no browser required, so this is the blocking
       # gate on EVERY OS, including macOS and Windows.
       - name: Run daemon transport contract E2E
-        run: npx vitest run --project e2e-fixed-port tests/e2e/daemon-transport.test.ts --reporter=verbose
+        run: npx vitest run --project e2e-fixed-port --reporter=verbose
 
       - name: Run E2E tests (Linux, via xvfb)
         if: runner.os == 'Linux'

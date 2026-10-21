@@ -135,7 +135,7 @@ export async function loadCommandCatalog(binary, {
 } = {}) {
   let stdout;
   try {
-    ({ stdout } = await run(binary, ['list', '-f', 'json'], {
+    ({ stdout } = await run(binary, ['list', '--full', '-f', 'json'], {
       timeout: 30_000,
       maxBuffer: 32 * 1024 * 1024,
     }));
@@ -145,6 +145,7 @@ export async function loadCommandCatalog(binary, {
   let commands;
   try {
     commands = JSON.parse(stdout);
+    if (commands?.ok === true && Object.hasOwn(commands, 'data')) commands = commands.data;
   } catch {
     throw new Error('OpenCLI command catalog is not valid JSON');
   }

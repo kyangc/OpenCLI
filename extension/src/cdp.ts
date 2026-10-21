@@ -21,6 +21,8 @@ const CDP_REQUEST_BODY_CAPTURE_LIMIT = 1 * 1024 * 1024;
 
 type NetworkCaptureEntry = {
   kind: 'cdp';
+  requestId: string;
+  captureComplete?: boolean;
   url: string;
   method: string;
   requestHeaders?: Record<string, string>;
@@ -397,9 +399,11 @@ export async function setFileInputFiles(
       };
       chrome.debugger.onEvent.addListener(listener);
       // Open the chooser programmatically — interception suppresses the native
-      // dialog and fires Page.fileChooserOpened instead. Works for hidden inputs.
+      // dialog and fires Page.fileChooserOpened instead. Chrome requires user
+      // activation even for visible inputs; hidden inputs need no style changes.
       void sendDebuggerCommand({ tabId }, 'Runtime.evaluate', {
         expression: `document.querySelector(${JSON.stringify(query)}).click()`,
+        userGesture: true,
       }).catch((err) => {
         cleanup();
         reject(err instanceof Error ? err : new Error(String(err)));
@@ -762,6 +766,7 @@ function getOrCreateNetworkCaptureEntry(tabId: number, requestId: string, fallba
   const record: NetworkCaptureRecord = {
     entry: {
       kind: 'cdp',
+      requestId,
       url,
       method: fallback?.method || 'GET',
       requestHeaders: fallback?.requestHeaders || {},
@@ -788,20 +793,22 @@ export async function startNetworkCapture(
   });
 }
 
-export async function readNetworkCapture(tabId: number): Promise<NetworkCaptureEntry[]> {
+export async function readNetworkCapture(tabId: number, retainIncomplete = false): Promise<NetworkCaptureEntry[]> {
   const state = networkCaptures.get(tabId);
   if (!state) return [];
-  const completed: NetworkCaptureEntry[] = [];
+  const entries: NetworkCaptureEntry[] = [];
   const pending: NetworkCaptureRecord[] = [];
   for (const record of state.entries) {
-    if (record.networkTerminal && record.pendingBodyFetches === 0) {
-      completed.push(record.entry);
-    } else {
-      pending.push(record);
+    const captureComplete = record.networkTerminal && record.pendingBodyFetches === 0;
+    // Default reads preserve the fork's completed-only contract. Opt-in reads
+    // expose snapshots for polling without losing the stable in-flight record.
+    if (captureComplete || retainIncomplete) {
+      entries.push({ ...record.entry, captureComplete });
     }
+    if (!captureComplete) pending.push(record);
   }
   state.entries = pending;
-  return completed;
+  return entries;
 }
 
 export function hasActiveNetworkCapture(tabId: number): boolean {

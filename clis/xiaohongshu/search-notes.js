@@ -42,7 +42,7 @@ async function acquireSearchRows(page, kwargs) {
             const searchRows = await searchCommand.func(searchHandle, {
                 query: kwargs.query,
                 limit: kwargs.limit,
-            }, { applyDefaultFilters: false });
+            }, { applyDefaultFilters: false, contentWaitSeconds: 15 });
             return {
                 searchHandle,
                 searchPage: requireActivePage(searchHandle),

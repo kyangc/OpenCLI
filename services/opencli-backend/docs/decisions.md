@@ -32,7 +32,7 @@
 - backend 作为独立深模块位于 `stable` 的 `services/opencli-backend`；`main` 继续只做上游 fast-forward 镜像。
 - Docker 只从当前 checkout 构建 CLI、unpacked 扩展和 backend，不再接受第二个仓库 URL 或 commit selector。
 - backend 保持独立 `package.json`、lockfile 和 Node.js 24 runtime，暂不加入 root npm workspace，避免依赖、audit 和发布面相互污染。
-- backend 只通过 `opencli list -f json`、结构化 argv、JSON 输出和公开退出码组成的进程 seam 使用 OpenCLI，不导入 CLI/daemon 实现。
+- backend 只通过 `opencli list --full -f json`、结构化 argv、JSON 输出和公开退出码组成的进程 seam 使用 OpenCLI，不导入 CLI/daemon 实现。
 - Node.js 24 backend CI 对该 seam、backend 测试、Compose 和容器构建做同一次验证；CLI release 包的文件白名单继续排除 backend。
 - `OPENCLI_RUNTIME_ROOT` 是 browser profile、SQLite、OpenCLI state 和 secrets 的唯一持久目录权威；源码 checkout 的移动不能隐式改变运行数据位置。
 

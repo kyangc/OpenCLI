@@ -45,6 +45,8 @@ function pageWithOneNote(detail = {
         wait: vi.fn().mockResolvedValue(undefined),
         evaluate: vi.fn(async (script) => {
             const source = String(script);
+            if (source.includes('search-icon'))
+                return { status: 'ok' };
             if (source.includes('findNoteCard'))
                 return 'content';
             if (source.includes('const requestedFilters ='))
@@ -90,7 +92,7 @@ function pageWithStalledMiddleNote() {
     const detailByPage = new Map();
     const page = {
         goto: vi.fn((url) => {
-            if (url.includes('/search_result?'))
+            if (url.endsWith('/explore'))
                 return Promise.resolve();
             if (url.includes(SECOND_NOTE_ID))
                 return new Promise(() => {});
@@ -100,6 +102,8 @@ function pageWithStalledMiddleNote() {
         wait: vi.fn().mockResolvedValue(undefined),
         evaluate: vi.fn(async (script) => {
             const source = String(script);
+            if (source.includes('search-icon'))
+                return { status: 'ok' };
             if (source.includes('findNoteCard'))
                 return 'content';
             if (source.includes('const requestedFilters ='))
@@ -165,7 +169,7 @@ function pageWithRecoverableSearchTransportStall() {
             ...page,
             withCommandTimeout: page.withCommandTimeout,
             goto: vi.fn((url) => {
-                if (url.includes('/search_result?') && searchAttempt === 1) {
+                if (url.endsWith('/explore') && searchAttempt === 1) {
                     return new Promise((_, reject) => {
                         setTimeout(() => reject(Object.assign(
                             new Error('local browser command deadline expired'),
@@ -208,6 +212,8 @@ describe('xiaohongshu search-notes', () => {
             query: '里斯本 雨天安排',
             limit: 1,
         });
+        // Preserve headroom below the backend's 20s browser-operation deadline.
+        expect(page.evaluate).toHaveBeenCalledWith(expect.stringContaining("timer = setTimeout(() => finish('timeout'), 15000)"));
 
         expect(result).toHaveLength(1);
         expect(result[0].title).toBe('里斯本雨天慢游');
@@ -303,6 +309,8 @@ describe('xiaohongshu search-notes', () => {
         let detailReads = 0;
         page.evaluate.mockImplementation(async (script) => {
             const source = String(script);
+            if (source.includes('search-icon'))
+                return { status: 'ok' };
             if (source.includes('findNoteCard'))
                 return 'content';
             if (source.includes('const requestedFilters ='))
@@ -443,7 +451,7 @@ describe('xiaohongshu search-notes', () => {
         vi.useFakeTimers();
         try {
             const page = pageWithStalledMiddleNote();
-            page.goto.mockImplementation((url) => url.includes('/search_result?')
+            page.goto.mockImplementation((url) => url.endsWith('/explore')
                 ? new Promise((resolve) => setTimeout(resolve, 20_000))
                 : new Promise(() => {}));
             const settled = vi.fn();

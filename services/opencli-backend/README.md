@@ -146,7 +146,7 @@ session check 同样返回普通 job，并经过同一个资源感知队列；�
 - `POST /v1/control/resume`
 - `GET /v1/audit?limit=100`
 
-除健康检查外，所有接口都需要 bearer token。backend 启动时通过 `opencli list -f json` 加载命令 catalog：默认自动开放其中的 `access=read` 命令，write 命令仍需在 `OPENCLI_ALLOWED_COMMANDS` 中显式配置。动态命令必须使用结构化 `params`；`args` 只为 `OPENCLI_ALLOWED_COMMANDS` 中的兼容命令保留。服务始终使用 argv 执行并强制 JSON 输出。
+除健康检查外，所有接口都需要 bearer token。backend 启动时通过 `opencli list --full -f json` 加载命令 catalog：默认自动开放其中的 `access=read` 命令，write 命令仍需在 `OPENCLI_ALLOWED_COMMANDS` 中显式配置。动态命令必须使用结构化 `params`；`args` 只为 `OPENCLI_ALLOWED_COMMANDS` 中的兼容命令保留。服务始终使用 argv 执行并强制 JSON 输出。
 
 输入错误同时返回稳定的 `code`、`field`、`retryable` 和人类可读 `message`，便于 Agent 自行修正。命令执行错误使用 job `status` 和 `errorCode`；`needs_login` 需要人工通过 GUI 恢复会话，不应自动高频重试。
 由于服务强制 `--format json`，退出码为零但输出被截断或不是合法 JSON 时也会 fail closed，分别返回

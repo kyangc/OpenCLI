@@ -16,10 +16,10 @@ const MIN_LIMIT = 1;
 const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 20;
 const CAPTURE_PATTERN = '/international/search/api/search/batchSearch';
-const CAPTURE_TIMEOUT_SECONDS = 12;
+const CAPTURE_TIMEOUT_SECONDS = 25;
 const CAPTURE_TIMEOUT_MS = CAPTURE_TIMEOUT_SECONDS * 1000;
-const NO_CAPTURE_TIMEOUT_MESSAGE = 'No completed batchSearch response was captured within 12s after navigation.';
-const PARTIAL_CAPTURE_TIMEOUT_MESSAGE = 'Ctrip returned partial flight batches but did not report search completion within 12s after navigation; partial results were not returned.';
+const NO_CAPTURE_TIMEOUT_MESSAGE = 'No completed batchSearch response was captured within 25s after navigation.';
+const PARTIAL_CAPTURE_TIMEOUT_MESSAGE = 'Ctrip returned partial flight batches but did not report search completion within 25s after navigation; partial results were not returned.';
 const NO_CAPTURE_TIMEOUT_HINT = 'Retry the search or try again later.';
 const PARTIAL_CAPTURE_TIMEOUT_HINT = 'Partial results were not returned. Retry the search or try again later.';
 const UNSAFE_CAPTURE_MESSAGE = 'Ctrip flight batchSearch response could not be safely processed.';
@@ -50,12 +50,24 @@ function parseBatchSearchCaptures(entries) {
     if (!Array.isArray(entries)) {
         throw new CommandExecutionError(UNSAFE_CAPTURE_MESSAGE);
     }
-    const captured = entries.filter((entry) => String(entry?.url || '').includes(CAPTURE_PATTERN));
+    const captured = entries.filter((entry) => {
+        try {
+            const url = new URL(entry?.url);
+            return url.protocol === 'https:' && url.hostname === 'flights.ctrip.com' && url.pathname === CAPTURE_PATTERN;
+        } catch { return false; }
+    });
     if (captured.length === 0) return null;
 
     const parsedItineraries = [];
     let finished = false;
+    const pendingRequests = [];
+    const completedRequests = [];
     for (const entry of captured) {
+        if (entry.captureComplete === false || (entry.captureComplete !== true && typeof entry.responsePreview !== 'string')) {
+            pendingRequests.push(entry.requestId || entry);
+            continue;
+        }
+        completedRequests.push(entry.requestId || entry);
         const status = Number(entry?.responseStatus || 0);
         if (status === 401 || status === 403) {
             throw new AuthRequiredError('flights.ctrip.com', 'Ctrip flight API requires authentication or verification.');
@@ -69,7 +81,8 @@ function parseBatchSearchCaptures(entries) {
         }
         let payload;
         try {
-            payload = JSON.parse(entry.responsePreview);
+            const body = entry.responsePreview.startsWith('base64:') ? Buffer.from(entry.responsePreview.slice(7), 'base64').toString('utf8') : entry.responsePreview;
+            payload = JSON.parse(body);
         }
         catch {
             throw new CommandExecutionError(UNSAFE_CAPTURE_MESSAGE);
@@ -90,7 +103,7 @@ function parseBatchSearchCaptures(entries) {
         }
         finished ||= payload.data.context.finished;
     }
-    return { itineraries: parsedItineraries, finished };
+    return { itineraries: parsedItineraries, finished, pendingRequests, completedRequests };
 }
 
 function captureTimeout(hasPartialBatch) {
@@ -150,6 +163,7 @@ cli({
     strategy: Strategy.INTERCEPT,
     browser: true,
     navigateBefore: false,
+    defaultWindowMode: 'foreground',
     args: [
         { name: 'from', required: true, positional: true, help: 'Departure IATA code (e.g. BJS / PEK)' },
         { name: 'to', required: true, positional: true, help: 'Arrival IATA code (e.g. SHA / PVG)' },
@@ -181,30 +195,38 @@ cli({
             !await page.startNetworkCapture(CAPTURE_PATTERN)) {
             throw new CommandExecutionError('Ctrip flight requires browser response interception');
         }
-        await page.readNetworkCapture();
+        // Retaining reads never wait indefinitely for an in-flight response body.
+        await page.readNetworkCapture({ retainIncomplete: true });
+        const startedAt = Date.now();
         await page.goto(searchUrl);
         const captureDeadline = performance.now() + CAPTURE_TIMEOUT_MS;
-        if (await page.evaluate(CHECK_CAPTCHA_JS) === 'captcha') {
-            throw new AuthRequiredError('flights.ctrip.com', 'Ctrip is asking for a captcha; complete it in your browser session and retry');
-        }
-
         const itinerariesById = new Map();
         let sawPartialBatch = false;
+        let searchFinished = false;
+        const pendingRequests = new Set();
         let itineraries;
-        while (true) {
+        for (let attempt = 0; ; attempt++) {
+            if (performance.now() >= captureDeadline || attempt >= CAPTURE_TIMEOUT_SECONDS * 2) {
+                throw captureTimeout(sawPartialBatch);
+            }
+            if (await page.evaluate(CHECK_CAPTCHA_JS) === 'captcha') {
+                throw new AuthRequiredError('flights.ctrip.com', 'Ctrip is asking for a captcha; complete it in your browser session and retry');
+            }
+            const entries = await page.readNetworkCapture({ retainIncomplete: true });
             if (performance.now() >= captureDeadline) {
                 throw captureTimeout(sawPartialBatch);
             }
-            const entries = await page.readNetworkCapture();
-            if (performance.now() >= captureDeadline) {
-                throw captureTimeout(sawPartialBatch);
-            }
-            const batch = parseBatchSearchCaptures(entries);
+            const batch = parseBatchSearchCaptures(Array.isArray(entries)
+                ? entries.filter((entry) => !entry?.timestamp || entry.timestamp >= startedAt)
+                : entries);
             if (batch) {
                 for (const itinerary of batch.itineraries) {
                     itinerariesById.set(cleanString(itinerary.itineraryId), itinerary);
                 }
-                if (batch.finished) {
+                for (const request of batch.pendingRequests) pendingRequests.add(request);
+                for (const request of batch.completedRequests) pendingRequests.delete(request);
+                searchFinished ||= batch.finished;
+                if (searchFinished && pendingRequests.size === 0) {
                     itineraries = [...itinerariesById.values()];
                     break;
                 }

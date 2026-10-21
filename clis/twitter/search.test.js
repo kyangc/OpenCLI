@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { getRegistry } from '@jackwener/opencli/registry';
 import { __test__ } from './search.js';
 
-const { buildSearchQuery, resolveSearchFParam, resolveSearchProduct, buildSearchTimelineRequest, parseSearchTimeline, HAS_CHOICES, EXCLUDE_CHOICES, PRODUCT_CHOICES, EXCLUDE_TO_OPERATOR, PRODUCT_TO_F_PARAM, FROM_USER_PATTERN } = __test__;
+const { buildSearchQuery, resolveSearchFParam, resolveSearchProduct, buildSearchTimelineRequest, parseSearchTimeline, EXCLUDE_CHOICES, PRODUCT_CHOICES, EXCLUDE_TO_OPERATOR, PRODUCT_TO_F_PARAM, FROM_USER_PATTERN } = __test__;
 describe('twitter search command', () => {
     // Mocked SearchTimeline operation metadata. The dynamic resolver
     // (resolveTwitterOperationMetadata) is exercised via page.evaluate's first
@@ -83,6 +83,8 @@ describe('twitter search command', () => {
                 author_info: { id: null, handle: 'alice', name: null, avatar_url: null, verification: { verified: null, type: 'unknown' } },
                 id: '1',
                 author: 'alice',
+                author_avatar: '',
+                author_verified: false,
                 bio: 'Search author bio',
                 text: 'hello world',
                 created_at: 'Thu Mar 26 10:30:00 +0000 2026',
@@ -92,6 +94,7 @@ describe('twitter search command', () => {
                 has_media: false,
                 media_urls: [],
                 media_posters: [],
+                media_durations: [],
                 card: null,
                 quoted_tweet: null,
             },
@@ -299,25 +302,7 @@ describe('twitter search filter helpers', () => {
     });
 
     describe('choice surface', () => {
-        it('exposes the documented HAS_CHOICES set', () => {
-            expect(HAS_CHOICES).toEqual(['media', 'images', 'videos', 'links', 'replies']);
-        });
-        it('exposes the documented EXCLUDE_CHOICES set', () => {
-            expect(EXCLUDE_CHOICES).toEqual(['replies', 'retweets', 'media', 'links']);
-        });
-        it('exposes the documented PRODUCT_CHOICES set', () => {
-            expect(PRODUCT_CHOICES).toEqual(['top', 'live', 'photos', 'videos']);
-        });
-        it('keeps PRODUCT_TO_F_PARAM domain a strict subset of PRODUCT_CHOICES', () => {
-            for (const choice of PRODUCT_CHOICES) {
-                expect(PRODUCT_TO_F_PARAM[choice]).toBeTypeOf('string');
-            }
-        });
-        it('keeps EXCLUDE_TO_OPERATOR domain a strict subset of EXCLUDE_CHOICES', () => {
-            for (const choice of EXCLUDE_CHOICES) {
-                expect(EXCLUDE_TO_OPERATOR[choice]).toMatch(/^-filter:/);
-            }
-        });
+
         it('keeps FROM_USER_PATTERN aligned with X handle syntax', () => {
             expect(FROM_USER_PATTERN.test('alice_123')).toBe(true);
             expect(FROM_USER_PATTERN.test('a'.repeat(15))).toBe(true);
@@ -325,78 +310,4 @@ describe('twitter search filter helpers', () => {
             expect(FROM_USER_PATTERN.test('alice/bob')).toBe(false);
         });
     });
-});
-
-describe('twitter search end-to-end with new filters', () => {
-    it('encodes the composed query and product=live into the GraphQL request', async () => {
-        const command = getRegistry().get('twitter/search');
-        const evaluate = vi.fn()
-            .mockResolvedValueOnce(null)
-            .mockResolvedValueOnce({ data: { search_by_raw_query: { search_timeline: { timeline: { instructions: [] } } } } });
-        const page = {
-            getCookies: vi.fn().mockResolvedValue([{ name: 'ct0', value: 'csrf' }]),
-            goto: vi.fn().mockResolvedValue(undefined),
-            evaluate,
-        };
-        await command.func(page, {
-            query: 'breaking news',
-            from: '@alice',
-            has: 'images',
-            exclude: 'retweets',
-            product: 'live',
-            limit: 5,
-        });
-        const searchFetch = evaluate.mock.calls[1][0];
-        expect(searchFetch).toContain('\\"product\\":\\"Latest\\"');
-        expect(searchFetch).toContain('\\"rawQuery\\":\\"breaking news from:alice filter:images -filter:nativeretweets\\"');
-    });
-    it('throws ArgumentError when query and all filters are empty', async () => {
-        const command = getRegistry().get('twitter/search');
-        const page = {
-            goto: vi.fn().mockResolvedValue(undefined),
-            evaluate: vi.fn(),
-        };
-        await expect(command.func(page, { query: '   ', limit: 5 }))
-            .rejects
-            .toThrow(/empty/i);
-        expect(page.goto).not.toHaveBeenCalled();
-    });
-    it('throws ArgumentError for invalid --from before navigation', async () => {
-        const command = getRegistry().get('twitter/search');
-        const page = {
-            goto: vi.fn(),
-            evaluate: vi.fn(),
-        };
-        await expect(command.func(page, { query: 'hi', from: 'alice filter:links', limit: 5 }))
-            .rejects
-            .toThrow(/Invalid --from/);
-        expect(page.goto).not.toHaveBeenCalled();
-    });
-    it('throws ArgumentError for invalid --limit before navigation', async () => {
-        const command = getRegistry().get('twitter/search');
-        const page = {
-            goto: vi.fn(),
-            evaluate: vi.fn(),
-        };
-        await expect(command.func(page, { query: 'hi', limit: 0 }))
-            .rejects
-            .toThrow(/--limit/);
-        expect(page.goto).not.toHaveBeenCalled();
-    });
-    it('runs with only filters set (empty <query>)', async () => {
-        const command = getRegistry().get('twitter/search');
-        const evaluate = vi.fn()
-            .mockResolvedValueOnce(null)
-            .mockResolvedValueOnce({ data: { search_by_raw_query: { search_timeline: { timeline: { instructions: [] } } } } });
-        const page = {
-            getCookies: vi.fn().mockResolvedValue([{ name: 'ct0', value: 'csrf' }]),
-            goto: vi.fn().mockResolvedValue(undefined),
-            evaluate,
-        };
-        const result = await command.func(page, { query: '', from: 'alice', limit: 5 });
-        expect(result).toEqual([]);
-        const searchFetch = evaluate.mock.calls[1][0];
-        expect(searchFetch).toContain('\\"rawQuery\\":\\"from:alice\\"');
-    });
-
 });

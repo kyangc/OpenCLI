@@ -63,6 +63,7 @@ type BrowserInventory = {
 };
 
 type DaemonStatus = {
+  pid?: number;
   profiles?: Array<{ contextId?: string }>;
 };
 
@@ -232,7 +233,7 @@ describe('browser operation lifecycle (real headed Chrome)', () => {
       daemonStderr += chunk.toString();
       if (daemonStderr.length > 20_000) daemonStderr = daemonStderr.slice(-20_000);
     });
-    await waitFor(async () => (await getStatus()) !== null, 10_000, 'Real daemon did not start');
+    await waitFor(async () => daemon?.pid !== undefined && (await getStatus())?.pid === daemon.pid, 10_000, 'Test-owned daemon did not start');
     // A developer's already-open Browser Bridge reconnects on a bounded 5s
     // backoff. Let those profiles settle before launching the temporary Chrome,
     // otherwise an existing profile can be mistaken for this test's fresh one.
@@ -282,13 +283,9 @@ describe('browser operation lifecycle (real headed Chrome)', () => {
   afterAll(async () => {
     await stopProcess(chrome);
     await site?.close();
-    try {
-      await fetch(`${BASE}/shutdown`, {
-        method: 'POST',
-        headers: HEADERS,
-        signal: AbortSignal.timeout(2_000),
-      });
-    } catch { /* daemon may already be gone */ }
+    // Only terminate the process this fixture created. beforeAll can fail
+    // because a user's daemon already occupies the fixed port; sending a
+    // shutdown request there would stop that unrelated daemon during cleanup.
     await stopProcess(daemon);
     if (userDataDir) fs.rmSync(userDataDir, { recursive: true, force: true });
   }, 20_000);
@@ -378,6 +375,11 @@ describe('browser operation lifecycle (real headed Chrome)', () => {
         survivingPages: [],
       }));
       expect(inventoryResult.result.ok, redEvidence).toBe(true);
+      expect(diagnosticSessionTabs.status, redEvidence).toBe(200);
+      expect(diagnosticSessionTabs.result, redEvidence).toMatchObject({
+        ok: false,
+        errorCode: 'operation_cancelled',
+      });
       const inventory = inventoryResult.result.data as BrowserInventory;
 
       expect(inventory.leases.some((lease) => lease.operationId === operationSession), JSON.stringify({

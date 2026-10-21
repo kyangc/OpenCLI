@@ -20,6 +20,7 @@ export function jobResult(job) {
   if (!isEmptyResult) {
     try {
       output = JSON.parse(job.stdout);
+      if (output?.ok === true && Object.hasOwn(output, 'data')) output = output.data;
     } catch {
       // Retain non-JSON OpenCLI output as text.
     }

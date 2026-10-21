@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import {
   _extractLatestExtensionVersionFromReleases as extractLatestExtensionVersionFromReleases,
   _buildUpdateNotices as buildUpdateNotices,
@@ -150,5 +153,80 @@ describe('buildUpdateNotices', () => {
     });
     expect(lines.cli).toContain('v1.0.0 → v1.1.0');
     expect(lines.extension).toContain('v2.0.0 → v2.1.0');
+  });
+});
+
+
+describe('independent update schedules', () => {
+  let cacheHome: string;
+  afterEach(() => {
+    vi.doUnmock('node:os');
+    vi.doUnmock('./version.js');
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+    if (cacheHome) fs.rmSync(cacheHome, { recursive: true, force: true });
+  });
+
+  it('checks fork extension releases without fetching the upstream npm package', async () => {
+    cacheHome = fs.mkdtempSync(path.join(os.tmpdir(), 'opencli-fork-update-'));
+    vi.doMock('node:os', () => ({ ...os, homedir: () => cacheHome }));
+    vi.doMock('./version.js', () => ({ IS_FORK_BUILD: true, PKG_VERSION: '3.0.0' }));
+    vi.stubEnv('CI', '');
+    vi.stubEnv('CONTINUOUS_INTEGRATION', '');
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify([{ tag_name: 'ext-v2.1.0' }])));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.resetModules();
+
+    (await import('./update-check.js')).checkForUpdateBackground();
+
+    const cacheFile = path.join(cacheHome, '.opencli', 'update-check.json');
+    await vi.waitFor(() => expect(JSON.parse(fs.readFileSync(cacheFile, 'utf8')).latestExtensionVersion).toBe('2.1.0'));
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      'https://api.github.com/repos/kyangc/OpenCLI/releases?per_page=20',
+      expect.any(Object),
+    );
+  });
+
+  it.each(['npm', 'github'])('retries a failed %s lookup independently of the other cache', async (failedService) => {
+    cacheHome = fs.mkdtempSync(path.join(os.tmpdir(), 'opencli-update-schedule-'));
+    vi.doMock('node:os', () => ({ ...os, homedir: () => cacheHome }));
+    vi.doMock('./version.js', () => ({ IS_FORK_BUILD: false, PKG_VERSION: '2.0.2' }));
+    vi.stubEnv('CI', '');
+    vi.stubEnv('CONTINUOUS_INTEGRATION', '');
+    const cacheDir = path.join(cacheHome, '.opencli');
+    const cacheFile = path.join(cacheDir, 'update-check.json');
+    fs.mkdirSync(cacheDir);
+    fs.writeFileSync(cacheFile, JSON.stringify({ currentExtensionVersion: '1.0.0', extensionLastSeenAt: Date.now() }));
+    const read = () => JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    let fail = true;
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const service = String(url).includes('github.com') ? 'github' : 'npm';
+      if (service === failedService && fail) return new Response('', { status: 403 });
+      return new Response(JSON.stringify(service === 'npm' ? { version: '9.0.0' }
+        : [{ tag_name: 'ext-v9.0.0' }]));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.resetModules();
+    const { checkForUpdateBackground } = await import('./update-check.js');
+    checkForUpdateBackground();
+    const successKey = failedService === 'npm' ? 'latestExtensionVersion' : 'latestVersion';
+    const failedKey = failedService === 'npm' ? 'latestVersion' : 'latestExtensionVersion';
+    await vi.waitFor(() => expect(read()[successKey]).toBe('9.0.0'));
+    expect(read()[failedKey]).toBeUndefined();
+    expect(read().currentExtensionVersion).toBe('1.0.0');
+    const successfulCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes(failedService === 'npm' ? 'github.com' : 'npmjs.org')).length;
+    const callsBeforeRetry = fetchMock.mock.calls.length;
+    checkForUpdateBackground();
+    expect(fetchMock).toHaveBeenCalledTimes(callsBeforeRetry);
+    fail = false;
+    // Move beyond a short retry backoff, but well inside the 24-hour success window.
+    const now = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now + 10 * 60 * 1000);
+    vi.resetModules();
+    (await import('./update-check.js')).checkForUpdateBackground();
+    await vi.waitFor(() => expect(read()[failedKey]).toBe('9.0.0'));
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes(failedService === 'npm' ? 'github.com' : 'npmjs.org'))).toHaveLength(successfulCalls);
   });
 });

@@ -5,6 +5,8 @@
  */
 
 export type Action =
+  | 'chrome-call'
+  | 'chrome-describe'
   | 'exec'
   | 'navigate'
   | 'tabs'
@@ -13,6 +15,7 @@ export type Action =
   | 'close-window'
   | 'operation-cancel'
   | 'inventory'
+  | 'close-owned-tab'
   | 'sessions'
   | 'set-file-input'
   | 'insert-text'
@@ -28,10 +31,14 @@ export interface Command {
   id: string;
   /** Action type */
   action: Action;
+  /** Keep in-flight network capture entries for a later completed read. */
+  retainIncomplete?: boolean;
   /** Target page identity (targetId). Cross-layer contract with the daemon. */
   page?: string;
   /** JS code to evaluate in page context (exec action) */
   code?: string;
+  chromeMethod?: string;
+  chromeArgs?: unknown[];
   /** Browser session name for tab/page continuity. */
   session?: string;
   /** Runtime surface selecting owned container policy. */

@@ -11,6 +11,10 @@
 npm install -g @jackwener/opencli
 ```
 
+## 安装 Browser Bridge 扩展
+
+使用浏览器命令前，推荐从 [Chrome Web Store](https://chromewebstore.google.com/detail/opencli/ildkmabpimmkaediidaifkhjpohdnifk) 安装 **OpenCLI** 扩展。手动安装方式和验证步骤见 [Browser Bridge 设置](./browser-bridge)。
+
 ## 从源码安装
 
 ```bash
@@ -37,8 +41,6 @@ npx skills add jackwener/opencli
 npx skills add jackwener/opencli --skill opencli-adapter-author
 npx skills add jackwener/opencli --skill opencli-autofix
 npx skills add jackwener/opencli --skill opencli-browser
-npx skills add jackwener/opencli --skill opencli-browser-sitemap
-npx skills add jackwener/opencli --skill opencli-sitemap-author
 npx skills add jackwener/opencli --skill opencli-usage
 npx skills add jackwener/opencli --skill smart-search
 ```
