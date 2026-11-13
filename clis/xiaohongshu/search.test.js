@@ -371,6 +371,50 @@ async function runHarvestFrames(frames, { target = frames.length, stallsBeforeAd
     return { result, scrollDeltas, rootScrollCalls };
 }
 describe('xiaohongshu search', () => {
+    it.each(['search-input-in-feeds', 'search-input-ai'])('submits the current textarea layout through %s', async (id) => {
+        vi.useFakeTimers();
+        const dom = new JSDOM(`
+          <div style="display:none"><input id="search-input"><button class="search-icon">Old search</button></div>
+          <div class="input-box">
+            <textarea id="${id}" aria-hidden="true" style="opacity:0.00001"></textarea>
+            <textarea id="${id}"></textarea>
+            <div class="submit-button-wrapper">Search</div>
+          </div>
+          <div class="submit-button-wrapper">Unrelated control</div>
+        `, { url: 'https://www.xiaohongshu.com/explore' });
+        try {
+            const { document } = dom.window;
+            for (const element of document.querySelectorAll('input,textarea,button,.submit-button-wrapper')) markVisible(element);
+            const input = Array.from(document.querySelectorAll('textarea')).find(element => !element.hasAttribute('aria-hidden'));
+            const decoy = document.querySelector('textarea[aria-hidden]');
+            const wrongClick = vi.fn();
+            document.querySelector('.search-icon').addEventListener('click', wrongClick);
+            document.querySelector('body > .submit-button-wrapper').addEventListener('click', wrongClick);
+            let inputEvents = 0;
+            input.addEventListener('input', () => inputEvents++);
+            document.querySelector('.input-box .submit-button-wrapper').addEventListener('click', () => {
+                dom.window.history.pushState({}, '', '/search_result_ai?keyword=' + encodeURIComponent(encodeURIComponent('测试')));
+                const card = document.createElement('section');
+                card.className = 'note-item';
+                document.body.append(card);
+            });
+            const pending = Function('document', 'location', 'HTMLInputElement', 'Event', 'setTimeout',
+                `return (${__test__.buildInSiteSearchJs('测试')})`)(
+                document, dom.window.location, dom.window.HTMLInputElement, dom.window.Event, setTimeout,
+            );
+            await vi.runAllTimersAsync();
+            await expect(pending).resolves.toMatchObject({ status: 'ok' });
+            expect(input.value).toBe('测试');
+            expect(inputEvents).toBe(1);
+            expect(decoy.value).toBe('');
+            expect(wrongClick).not.toHaveBeenCalled();
+        }
+        finally {
+            dom.window.close();
+            vi.useRealTimers();
+        }
+    });
+
     it('submits the query through the visible search UI and waits for the SPA result layout', async () => {
         vi.useFakeTimers();
         try {

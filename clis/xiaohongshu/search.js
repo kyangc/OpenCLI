@@ -397,14 +397,17 @@ function buildInSiteSearchJs(query) {
         for (let attempt = 0; attempt < 50 && !input; attempt++) {
           const wall = blocked();
           if (wall) return wall;
-          const inputs = matches('#search-input');
+          const inputs = matches('#search-input, #search-input-ai, #search-input-in-feeds');
           if (inputs.length > 1) return { status: 'layout', detail: 'ambiguous_search_input' };
           input = inputs[0];
           if (!input) await sleep(100);
         }
-        if (!(input instanceof HTMLInputElement) || input.disabled || input.readOnly)
+        if (!input || !(input instanceof HTMLInputElement ||
+            input instanceof input.ownerDocument.defaultView.HTMLTextAreaElement) || input.disabled || input.readOnly)
           return { status: 'layout', detail: 'search_input_not_available' };
-        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+        const prototype = input instanceof HTMLInputElement
+          ? HTMLInputElement.prototype : input.ownerDocument.defaultView.HTMLTextAreaElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(prototype, 'value').set;
         input.focus();
         setter.call(input, query);
         input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -413,7 +416,8 @@ function buildInSiteSearchJs(query) {
         if (input.value !== query) return { status: 'layout', detail: 'search_input_not_filled' };
         const wall = blocked();
         if (wall) return wall;
-        const buttons = matches('.search-icon');
+        const buttons = input instanceof HTMLInputElement ? matches('.search-icon')
+          : Array.from(input.closest('.input-box')?.querySelectorAll('.submit-button-wrapper') || []).filter(visible);
         if (buttons.length !== 1) return { status: 'layout', detail: 'ambiguous_or_missing_search_button' };
         const button = buttons[0];
         if (button.disabled || button.getAttribute('aria-disabled') === 'true')
@@ -425,7 +429,10 @@ function buildInSiteSearchJs(query) {
           if (wall) return wall;
           const searchRendered = document.querySelector('.search-layout__top > .filter, .filter.ai-chat-filter, section.note-item, section:has(a[href*="/search_result/"])');
           const keyword = new URLSearchParams(location.search).get('keyword');
-          if (location.pathname === '/search_result' && keyword === query &&
+          const searchPage = location.pathname === '/search_result' || location.pathname === '/search_result_ai';
+          const queryMatches = keyword === query ||
+            (location.pathname === '/search_result_ai' && keyword === encodeURIComponent(query));
+          if (searchPage && queryMatches &&
               (searchRendered || document.querySelector('.search-empty-wrapper'))) {
             return { status: 'ok', detail: location.pathname };
           }
