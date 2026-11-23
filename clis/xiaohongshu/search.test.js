@@ -415,6 +415,44 @@ describe('xiaohongshu search', () => {
         }
     });
 
+    it.each([['测试', 'ok'], ['另一关键词', 'timeout']])('submits the named AI textarea with Enter and validates result keyword %s', async (keyword, status) => {
+        vi.useFakeTimers();
+        const dom = new JSDOM(`
+          <textarea name="aiSearchTextarea" aria-hidden="true"></textarea>
+          <textarea name="aiSearchTextarea"></textarea>
+        `, { url: 'https://www.xiaohongshu.com/explore' });
+        try {
+            const { document } = dom.window;
+            const [decoy, input] = document.querySelectorAll('textarea');
+            markVisible(decoy);
+            markVisible(input);
+            const submit = vi.fn((event) => {
+                if (event.key !== 'Enter') return;
+                event.preventDefault();
+                dom.window.history.pushState({}, '', '/search_result_ai?keyword=' + encodeURIComponent(encodeURIComponent(keyword)));
+                const card = document.createElement('section');
+                card.className = 'note-item';
+                document.body.append(card);
+            });
+            input.addEventListener('keydown', submit);
+            const secondSubmit = vi.fn();
+            input.addEventListener('keypress', secondSubmit);
+            const run = Function('document', 'location', 'HTMLInputElement', 'Event', 'setTimeout',
+                `return (${__test__.buildInSiteSearchJs('测试')})`);
+            const pending = run(document, dom.window.location, dom.window.HTMLInputElement, dom.window.Event, setTimeout);
+            await vi.runAllTimersAsync();
+            await expect(pending).resolves.toMatchObject({ status, detail: '/search_result_ai' });
+            expect(input.value).toBe('测试');
+            expect(decoy.value).toBe('');
+            expect(submit).toHaveBeenCalledTimes(1);
+            expect(secondSubmit).not.toHaveBeenCalled();
+        }
+        finally {
+            dom.window.close();
+            vi.useRealTimers();
+        }
+    });
+
     it('submits the query through the visible search UI and waits for the SPA result layout', async () => {
         vi.useFakeTimers();
         try {

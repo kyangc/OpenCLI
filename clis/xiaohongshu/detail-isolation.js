@@ -117,7 +117,7 @@ export async function readIsolatedDetail(page, anchorPage, signedUrl, commandNam
         detailHandle.setActivePage(detailPage);
         return await noteCommand.func(detailHandle, {
             'note-id': signedUrl,
-        }, { includePageUrl: true, ...internalOptions });
+        }, { ...internalOptions, includePageUrl: true, contentOnly: true });
     }
     finally {
         tabControl.setActivePage(anchorPage);
