@@ -47,6 +47,8 @@ describe('twitter search command', () => {
                                                             legacy: {
                                                                 full_text: 'hello world',
                                                                 favorite_count: 7,
+                                                                retweet_count: 3,
+                                                                reply_count: 4,
                                                                 created_at: 'Thu Mar 26 10:30:00 +0000 2026',
                                                             },
                                                             core: {
@@ -90,6 +92,8 @@ describe('twitter search command', () => {
                 text: 'hello world',
                 created_at: 'Thu Mar 26 10:30:00 +0000 2026',
                 likes: 7,
+                retweets: 3,
+                replies: 4,
                 views: '12',
                 url: 'https://x.com/i/status/1',
                 has_media: false,
