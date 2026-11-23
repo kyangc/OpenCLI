@@ -397,7 +397,7 @@ function buildInSiteSearchJs(query) {
         for (let attempt = 0; attempt < 50 && !input; attempt++) {
           const wall = blocked();
           if (wall) return wall;
-          const inputs = matches('#search-input, #search-input-ai, #search-input-in-feeds');
+          const inputs = matches('#search-input, #search-input-ai, #search-input-in-feeds, textarea[name="aiSearchTextarea"]');
           if (inputs.length > 1) return { status: 'layout', detail: 'ambiguous_search_input' };
           input = inputs[0];
           if (!input) await sleep(100);
@@ -418,11 +418,21 @@ function buildInSiteSearchJs(query) {
         if (wall) return wall;
         const buttons = input instanceof HTMLInputElement ? matches('.search-icon')
           : Array.from(input.closest('.input-box')?.querySelectorAll('.submit-button-wrapper') || []).filter(visible);
-        if (buttons.length !== 1) return { status: 'layout', detail: 'ambiguous_or_missing_search_button' };
-        const button = buttons[0];
-        if (button.disabled || button.getAttribute('aria-disabled') === 'true')
-          return { status: 'layout', detail: 'search_button_disabled' };
-        button.click();
+        if (buttons.length === 1) {
+          const button = buttons[0];
+          if (button.disabled || button.getAttribute('aria-disabled') === 'true')
+            return { status: 'layout', detail: 'search_button_disabled' };
+          button.click();
+        } else if (buttons.length === 0 && !(input instanceof HTMLInputElement) && input.name === 'aiSearchTextarea') {
+          const KeyboardEvent = input.ownerDocument.defaultView.KeyboardEvent;
+          const enter = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+          if (input.dispatchEvent(new KeyboardEvent('keydown', enter))) {
+            input.dispatchEvent(new KeyboardEvent('keypress', enter));
+          }
+          input.dispatchEvent(new KeyboardEvent('keyup', enter));
+        } else {
+          return { status: 'layout', detail: 'ambiguous_or_missing_search_button' };
+        }
         const deadline = Date.now() + ${SEARCH_NAVIGATION_SECONDS * 1000};
         while (Date.now() < deadline) {
           const wall = blocked();
