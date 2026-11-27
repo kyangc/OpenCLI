@@ -117,6 +117,26 @@ export function buildCommandDispatchFailure(contextId: string): DaemonFailureCon
   };
 }
 
+export interface DispatchSocket {
+  send(data: string, cb?: (err?: Error) => void): void;
+}
+
+export function dispatchCommandFrame(
+  ws: DispatchSocket,
+  payload: string,
+  onBeforeDispatchError: (err: unknown) => void,
+): boolean {
+  try {
+    ws.send(payload, (err?: Error) => {
+      if (err) onBeforeDispatchError(err);
+    });
+    return true;
+  } catch (err) {
+    onBeforeDispatchError(err);
+    return false;
+  }
+}
+
 export function getResponseCorsHeaders(pathname: string, origin?: string): Record<string, string> | undefined {
   if (pathname !== '/ping') return undefined;
   if (!origin || !origin.startsWith('chrome-extension://')) return undefined;

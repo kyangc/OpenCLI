@@ -606,6 +606,28 @@ describe('CDPBridge cookies', () => {
     expect(snapshot[0]).toMatchObject({ requestId: 'r4', responseStatus: 200 });
     expect(snapshot[0].responsePreview).toBeUndefined();
   });
+
+  it('caps buffered network capture entries at 500 to prevent unbounded growth', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+    const bridge = new CDPBridge();
+    vi.spyOn(bridge, 'send').mockResolvedValue({});
+    const page = await bridge.connect();
+    await page.startNetworkCapture?.('api.example');
+    const fire = (method: string, params: unknown) => MockWebSocket.lastInstance?.emit('message',
+      Buffer.from(JSON.stringify({ method, params })));
+
+    for (let i = 0; i < 510; i++) {
+      fire('Network.requestWillBeSent', {
+        requestId: `r-${i}`,
+        request: { method: 'GET', url: `https://api.example/${i}` },
+      });
+    }
+
+    const captured = await page.readNetworkCapture?.({ retainIncomplete: true }) as Array<Record<string, unknown>>;
+    expect(captured).toHaveLength(500);
+    expect(captured[0].url).toBe('https://api.example/10');
+    expect(captured[499].url).toBe('https://api.example/509');
+  });
 });
 
 describe('CDPBridge init script', () => {

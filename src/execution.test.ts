@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { CliCommand } from './registry.js';
 import { coerceAndValidateArgs, executeCommand, prepareCommandArgs } from './execution.js';
 import { ArgumentError, TimeoutError, toEnvelope } from './errors.js';
@@ -1292,5 +1293,91 @@ describe('executeCommand — site slot pool (OPENCLI_SITE_SLOTS)', () => {
     await executeCommand(pooledCmd('read'), {});
 
     expect(acquireSpy).toHaveBeenCalledWith(expect.objectContaining({ poolSize: 1, minIntervalMs: 2000, maxIntervalMs: 2000 }));
+  });
+});
+
+describe('executeCommand — lazy user adapter hot-reload', () => {
+  it('cache-busts and reloads a lazy user adapter when its file mtime changes on disk', async () => {
+    const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-hot-reload-'));
+    const siteDir = path.join(tempDir, 'demo');
+    const modulePath = path.join(siteDir, 'ping.js');
+    vi.stubEnv('OPENCLI_USER_CLIS_DIR', tempDir);
+    try {
+      await fs.promises.mkdir(siteDir, { recursive: true });
+      const registryUrl = pathToFileURL(path.join(process.cwd(), 'src', 'registry.ts')).href;
+      await fs.promises.writeFile(modulePath, `
+import { cli, Strategy } from ${JSON.stringify(registryUrl)};
+export default cli({
+  site: 'test-hot-reload',
+  name: 'ping',
+  access: 'read',
+  browser: false,
+  strategy: Strategy.PUBLIC,
+  func: async () => [{ version: 1 }],
+});
+`);
+
+      const lazyCmd = {
+        site: 'test-hot-reload',
+        name: 'ping',
+        access: 'read' as const,
+        description: 'hot reload test',
+        browser: false as const,
+        strategy: Strategy.PUBLIC,
+        args: [],
+        _lazy: true,
+        _modulePath: modulePath,
+      };
+
+      const importedSpecifiers: string[] = [];
+      const origImport = runtime ? undefined : undefined;
+      const importSpy = vi.spyOn(await import('./execution.js').then(m => m.executionHooks), 'importModule')
+        .mockImplementation(async (specifier: string) => {
+          importedSpecifiers.push(specifier);
+          // Strip cache-buster before delegating to Vitest's module runner, and
+          // update the registry directly on reload to emulate Node ESM fresh eval.
+          if (specifier.includes('?t=')) {
+            cli({
+              site: 'test-hot-reload',
+              name: 'ping',
+              access: 'read',
+              browser: false,
+              strategy: Strategy.PUBLIC,
+              func: async () => [{ version: 2 }],
+            });
+            return {};
+          }
+          return import(specifier);
+        });
+
+      expect(await executeCommand(lazyCmd, {})).toEqual([{ version: 1 }]);
+      expect(importedSpecifiers).toHaveLength(1);
+      expect(importedSpecifiers[0]).not.toContain('?t=');
+
+      // Re-running without mtime change reuses cached module
+      expect(await executeCommand(lazyCmd, {})).toEqual([{ version: 1 }]);
+      expect(importedSpecifiers).toHaveLength(1);
+
+      await fs.promises.writeFile(modulePath, `
+import { cli, Strategy } from ${JSON.stringify(registryUrl)};
+export default cli({
+  site: 'test-hot-reload',
+  name: 'ping',
+  access: 'read',
+  browser: false,
+  strategy: Strategy.PUBLIC,
+  func: async () => [{ version: 2 }],
+});
+`);
+      const nextTime = new Date(Date.now() + 5000);
+      await fs.promises.utimes(modulePath, nextTime, nextTime);
+
+      expect(await executeCommand(lazyCmd, {})).toEqual([{ version: 2 }]);
+      expect(importedSpecifiers).toHaveLength(2);
+      expect(importedSpecifiers[1]).toMatch(/\?t=\d+$/);
+      importSpy.mockRestore();
+    } finally {
+      await fs.promises.rm(tempDir, { recursive: true, force: true });
+    }
   });
 });

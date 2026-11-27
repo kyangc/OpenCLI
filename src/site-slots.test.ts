@@ -369,4 +369,21 @@ describe('slot admission boundaries', () => {
       expect(parseSlotPolicy({ poolSize: 1, maxIntervalMs: value })).toBeNull();
     }
   });
+  it('cancels queued waiters and replies 503 daemon_shutting_down on shutdown', () => {
+    const h = harness();
+    h.acquire('a', one);
+    h.acquire('b', one);
+    h.acquire('c', one);
+    expect(h.scheduler.isWaiting('b')).toBe(true);
+    expect(h.scheduler.isWaiting('c')).toBe(true);
+    expect(h.timers.size).toBeGreaterThan(0);
+
+    h.admission.shutdown();
+
+    expect(h.scheduler.isWaiting('b')).toBe(false);
+    expect(h.scheduler.isWaiting('c')).toBe(false);
+    expect(h.timers.size).toBe(0);
+    expect(h.replies.get('b')?.[0]).toMatchObject({ status: 503, body: { ok: false, errorCode: 'daemon_shutting_down' } });
+    expect(h.replies.get('c')?.[0]).toMatchObject({ status: 503, body: { ok: false, errorCode: 'daemon_shutting_down' } });
+  });
 });

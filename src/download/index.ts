@@ -144,19 +144,31 @@ export async function httpDownload(
   };
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const disarmTimeout = () => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+  const armTimeout = () => {
+    disarmTimeout();
+    timer = setTimeout(() => controller.abort(new Error(`Download timed out after ${timeout}ms`)), timeout);
+  };
+  armTimeout();
   try {
     const response = await fetchWithNodeNetwork(url, {
       headers: requestHeaders,
       signal: controller.signal,
       redirect: 'manual',
     });
-    clearTimeout(timer);
 
     // Handle redirects before creating any file handles.
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get('location');
       if (location) {
+        disarmTimeout();
+        await response.body?.cancel().catch(() => {});
         if (redirectCount >= maxRedirects) {
           return { success: false, size: 0, error: `Too many redirects (> ${maxRedirects})` };
         }
@@ -176,6 +188,7 @@ export async function httpDownload(
     }
 
     if (response.status !== 200) {
+      await response.body?.cancel().catch(() => {});
       return { success: false, size: 0, error: `HTTP ${response.status}` };
     }
 
@@ -187,6 +200,7 @@ export async function httpDownload(
     let received = 0;
     const progressStream = new Transform({
       transform(chunk, _encoding, callback) {
+        armTimeout();
         received += chunk.length;
         if (onProgress) onProgress(received, totalSize);
         callback(null, chunk);
@@ -199,6 +213,7 @@ export async function httpDownload(
         Readable.fromWeb(response.body as unknown as WebReadableStream),
         progressStream,
         fs.createWriteStream(tempPath),
+        { signal: controller.signal },
       );
       await fs.promises.rename(tempPath, destPath);
       const contentType = includeContentType
@@ -215,9 +230,10 @@ export async function httpDownload(
       return { success: false, size: 0, error: getErrorMessage(err) };
     }
   } catch (err) {
-    clearTimeout(timer);
     await cleanupTempFile();
     return { success: false, size: 0, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    disarmTimeout();
   }
 }
 

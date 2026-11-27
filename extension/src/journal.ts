@@ -29,28 +29,49 @@ type JournalEntry =
 type JournalMap = Record<string, JournalEntry>;
 
 let cache: JournalMap | null = null;
+let loadPromise: Promise<JournalMap> | null = null;
 let writeQueue: Promise<void> = Promise.resolve();
+let persistDirty = false;
+let persistScheduled = false;
 const inFlight = new Map<string, Promise<Result>>();
 
 async function load(): Promise<JournalMap> {
   if (cache) return cache;
-  try {
-    const stored = await chrome.storage.session.get(JOURNAL_KEY);
-    cache = (stored?.[JOURNAL_KEY] as JournalMap | undefined) ?? {};
-  } catch {
-    cache = {};
+  if (!loadPromise) {
+    loadPromise = (async () => {
+      try {
+        const stored = await chrome.storage.session.get(JOURNAL_KEY);
+        cache = (stored?.[JOURNAL_KEY] as JournalMap | undefined) ?? {};
+      } catch {
+        cache = {};
+      }
+      return cache;
+    })().finally(() => {
+      loadPromise = null;
+    });
   }
-  return cache;
+  return loadPromise;
 }
 
 function persist(): void {
-  const snapshot = cache;
-  if (!snapshot) return;
+  if (!cache) return;
+  persistDirty = true;
+  if (persistScheduled) return;
+  persistScheduled = true;
   writeQueue = writeQueue.then(async () => {
     try {
-      await chrome.storage.session.set({ [JOURNAL_KEY]: snapshot });
-    } catch {
-      // Storage unavailable — journal stays in-memory for this worker's lifetime.
+      while (persistDirty) {
+        persistDirty = false;
+        const snapshot = cache;
+        if (!snapshot) break;
+        try {
+          await chrome.storage.session.set({ [JOURNAL_KEY]: snapshot });
+        } catch {
+          // Storage unavailable — journal stays in-memory for this worker's lifetime.
+        }
+      }
+    } finally {
+      persistScheduled = false;
     }
   });
 }
@@ -63,8 +84,14 @@ function trim(journal: JournalMap): void {
 }
 
 function resultByteLength(result: Result): number {
+  if (typeof result.data === 'string' && result.data.length > JOURNAL_RESULT_MAX_BYTES) {
+    return result.data.length;
+  }
   try {
-    return JSON.stringify(result).length;
+    const serialized = JSON.stringify(result);
+    if (serialized.length > JOURNAL_RESULT_MAX_BYTES) return serialized.length;
+    if (serialized.length * 3 <= JOURNAL_RESULT_MAX_BYTES) return serialized.length;
+    return new TextEncoder().encode(serialized).byteLength;
   } catch {
     return Number.POSITIVE_INFINITY;
   }
@@ -140,7 +167,10 @@ export async function executeWithJournal(
 export const __test__ = {
   reset(): void {
     cache = null;
+    loadPromise = null;
     inFlight.clear();
     writeQueue = Promise.resolve();
+    persistDirty = false;
+    persistScheduled = false;
   },
 };

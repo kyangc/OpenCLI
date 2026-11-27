@@ -354,6 +354,27 @@ export class SlotAdmission {
     this.pump();
   }
 
+  /** Reject all queued slot waiters when the daemon shuts down. */
+  shutdown(): void {
+    if (this.wakeTimer !== null) {
+      this.clearTimer(this.wakeTimer);
+      this.wakeTimer = null;
+    }
+    for (const [runId, waiter] of [...this.waiters.entries()]) {
+      this.waiters.delete(runId);
+      this.clearTimer(waiter.waitTimer);
+      this.deps.scheduler.cancel(runId);
+      waiter.reply({
+        status: 503,
+        body: {
+          ok: false,
+          errorCode: 'daemon_shutting_down',
+          error: 'Daemon shutting down before a slot was granted.',
+        },
+      });
+    }
+  }
+
   /** A holder's in-flight command settled: its TTL-staleness may now count. */
   onWorkSettled(runId: string): void {
     this.deps.scheduler.touch(runId, this.now());

@@ -377,11 +377,38 @@ describe('daemon transport contracts (real daemon)', () => {
     }
   });
 
-  it('flushes a structured daemon_shutting_down 503 to in-flight dispatched commands on shutdown', async () => {
+  it('flushes a structured daemon_shutting_down 503 to in-flight commands and queued slot waiters on shutdown', async () => {
     if (guard()) return;
     const ext = new FakeExtension();
     ext.onCommand = () => null;
     await ext.connect('ctx-shutdown');
+
+    const holder = await postCommand({
+      id: cmdId(),
+      action: 'slot-acquire',
+      site: 'demo-shutdown',
+      runId: 'run-holder',
+      poolSize: 1,
+      minIntervalMs: 0,
+      maxIntervalMs: 0,
+      waitMs: 30_000,
+    });
+    expect(holder.status).toBe(200);
+    const queuedSlot = postCommand({
+      id: cmdId(),
+      action: 'slot-acquire',
+      site: 'demo-shutdown',
+      runId: 'run-waiter',
+      poolSize: 1,
+      minIntervalMs: 0,
+      maxIntervalMs: 0,
+      waitMs: 30_000,
+    });
+    await waitFor(async () => {
+      const status = await getStatus();
+      return (status?.siteSlots ?? []).some((slot: any) => slot.waiting === 1);
+    }, 5_000, 'queued slot waiter was not registered');
+
     const id = cmdId();
     const inflight = postCommand({ id, action: 'navigate', url: 'https://example.com', session: 's', surface: 'browser' });
     await waitFor(() => ext.dispatchCountFor(id) === 1, 5_000, 'command was not dispatched');
@@ -389,10 +416,13 @@ describe('daemon transport contracts (real daemon)', () => {
     await fetch(`${BASE}/shutdown`, { method: 'POST', headers: HEADERS, signal: AbortSignal.timeout(2_000) });
 
     // The contract under test: a structured JSON response, not a socket hang-up.
-    const { status, result } = await inflight;
+    const [{ status, result }, slotReply] = await Promise.all([inflight, queuedSlot]);
     expect(status).toBe(503);
     expect(result.ok).toBe(false);
     expect(result.errorCode).toBe('daemon_shutting_down');
+    expect(slotReply.status).toBe(503);
+    expect(slotReply.result.ok).toBe(false);
+    expect(slotReply.result.errorCode).toBe('daemon_shutting_down');
 
     await new Promise<void>((resolve) => {
       if (!daemon || daemon.exitCode !== null) return resolve();

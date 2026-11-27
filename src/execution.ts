@@ -25,6 +25,7 @@ import { pathToFileURL } from 'node:url';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
+import * as path from 'node:path';
 import { executePipeline } from './pipeline/index.js';
 import { adapterLoadError, ArgumentError, CommandExecutionError, SessionBusyError, attachTraceReceipt, getErrorMessage } from './errors.js';
 import { shouldUseBrowserSession } from './capabilityRouting.js';
@@ -41,7 +42,15 @@ import { BrowserOperation } from './browser/operation.js';
 const _loadedModules = new Map<string, Promise<void>>();
 /** Track mtime of loaded user adapter files for hot-reload in daemon mode. */
 const _moduleMtimes = new Map<string, number>();
-const _userClisDir = `${os.homedir()}/.opencli/clis/`;
+
+export const executionHooks = {
+  importModule: (specifier: string): Promise<unknown> => import(specifier),
+};
+
+function getUserClisDir(): string {
+  const base = process.env.OPENCLI_USER_CLIS_DIR || path.join(os.homedir(), '.opencli', 'clis');
+  return path.resolve(base) + path.sep;
+}
 
 type TraceMode = 'off' | 'on' | 'retain-on-failure';
 
@@ -108,12 +117,14 @@ async function runCommand(
   if (internal._lazy && internal._modulePath) {
     const modulePath = internal._modulePath;
     // Hot-reload: if a user adapter's file has changed on disk, invalidate cache
-    const isUserAdapter = modulePath.startsWith(_userClisDir);
+    const isUserAdapter = path.resolve(modulePath).startsWith(getUserClisDir());
+    let bustCache = false;
     if (isUserAdapter && _loadedModules.has(modulePath)) {
       try {
         const stat = fs.statSync(modulePath);
         const prevMtime = _moduleMtimes.get(modulePath);
         if (prevMtime !== undefined && stat.mtimeMs !== prevMtime) {
+          bustCache = true;
           _loadedModules.delete(modulePath);
           _moduleMtimes.delete(modulePath);
         }
@@ -121,8 +132,8 @@ async function runCommand(
     }
     if (!_loadedModules.has(modulePath)) {
       const url = pathToFileURL(modulePath).href;
-      const importUrl = _moduleMtimes.has(modulePath) ? `${url}?t=${Date.now()}` : url;
-      const loadPromise = import(importUrl).then(
+      const importUrl = bustCache ? `${url}?t=${Date.now()}` : url;
+      const loadPromise = executionHooks.importModule(importUrl).then(
         () => {
           try { _moduleMtimes.set(modulePath, fs.statSync(modulePath).mtimeMs); } catch {}
         },

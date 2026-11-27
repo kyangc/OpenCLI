@@ -48,6 +48,8 @@ const CDP_SEND_TIMEOUT = 30_000;
 // can tell the agent what happened instead of lying about the payload.
 export const CDP_RESPONSE_BODY_CAPTURE_LIMIT = 8 * 1024 * 1024;
 export const CDP_REQUEST_BODY_CAPTURE_LIMIT = 1 * 1024 * 1024;
+const MAX_NETWORK_CAPTURE_ENTRIES = 500;
+const MAX_NETWORK_CAPTURE_TOTAL_BYTES = 32 * 1024 * 1024;
 
 type NetworkCaptureEntry = {
   requestId: string;
@@ -341,6 +343,24 @@ class CDPPage extends CDPBasePage {
     }
   }
 
+  private _enforceNetworkCaptureBudget(): void {
+    const entryBytes = (entry: NetworkCaptureEntry) =>
+      (entry.requestBodyPreview?.length ?? 0) + (entry.responsePreview?.length ?? 0);
+    let totalBytes = 0;
+    for (const record of this._networkEntries) totalBytes += entryBytes(record.entry);
+    while (
+      this._networkEntries.length > MAX_NETWORK_CAPTURE_ENTRIES
+      || (this._networkEntries.length > 1 && totalBytes > MAX_NETWORK_CAPTURE_TOTAL_BYTES)
+    ) {
+      const evicted = this._networkEntries.shift();
+      if (!evicted) break;
+      totalBytes -= entryBytes(evicted.entry);
+      if (this._pendingRequests.get(evicted.entry.requestId) === evicted) {
+        this._pendingRequests.delete(evicted.entry.requestId);
+      }
+    }
+  }
+
   async startNetworkCapture(pattern: string = ''): Promise<boolean> {
     // A start begins a fresh capture window, including when listeners are
     // already installed from an earlier window.
@@ -389,6 +409,7 @@ class CDPPage extends CDPBasePage {
           };
           this._networkEntries.push(record);
           this._pendingRequests.set(p.requestId, record);
+          this._enforceNetworkCaptureBudget();
 
           if (p.request.hasPostData && p.request.postData === undefined) {
             record.pendingBodyFetches += 1;
@@ -401,6 +422,7 @@ class CDPPage extends CDPBasePage {
                 : postData;
               record.entry.requestBodyFullSize = postData.length;
               record.entry.requestBodyTruncated = truncated;
+              this._enforceNetworkCaptureBudget();
             }).catch(() => {
               // Some request types do not expose post data.
             }).finally(() => {
@@ -436,6 +458,7 @@ class CDPPage extends CDPBasePage {
               record.entry.responsePreview = r.base64Encoded ? `base64:${body}` : body;
               record.entry.responseBodyFullSize = fullSize;
               record.entry.responseBodyTruncated = truncated;
+              this._enforceNetworkCaptureBudget();
             } else {
               record.entry.responseBodyMissing = true;
               record.entry.responseBodyError = 'Response body unavailable';

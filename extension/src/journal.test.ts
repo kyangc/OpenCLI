@@ -118,4 +118,21 @@ describe('command journal', () => {
     expect(replay).toEqual(first);
     expect(execute).toHaveBeenCalledTimes(1);
   });
+
+  it('coalesces concurrent storage writes without losing the final journal state', async () => {
+    const execute = vi.fn(async (cmd: Command): Promise<Result> => ({ id: cmd.id, ok: true, data: cmd.id }));
+    await Promise.all([
+      executeWithJournal(makeCmd('burst-1'), execute),
+      executeWithJournal(makeCmd('burst-2'), execute),
+      executeWithJournal(makeCmd('burst-3'), execute),
+    ]);
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    const stored = sessionStorage._dump().opencli_command_journal_v1 as Record<string, { status: string }>;
+    expect(stored['burst-1']?.status).toBe('done');
+    expect(stored['burst-2']?.status).toBe('done');
+    expect(stored['burst-3']?.status).toBe('done');
+    // Fewer storage writes than the naive 2-per-command (6 writes)
+    expect(sessionStorage.set.mock.calls.length).toBeLessThan(6);
+  });
 });

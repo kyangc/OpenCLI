@@ -11,6 +11,7 @@ const tempDirs: string[] = [];
 afterEach(async () => {
   vi.unstubAllEnvs();
   await Promise.all(servers.map((server) => new Promise<void>((resolve, reject) => {
+    server.closeAllConnections?.();
     server.close((err) => (err ? reject(err) : resolve()));
   })));
   servers.length = 0;
@@ -196,6 +197,29 @@ describe('download helpers', { retry: process.platform === 'win32' ? 2 : 0 }, ()
     const mode = fs.statSync(cookiesPath).mode & 0o777;
     expect(mode).toBe(0o600);
     expect(fs.readFileSync(cookiesPath, 'utf8')).toContain('sid\tsecret');
+  });
+
+  it('aborts a stalled response body stream after the inactivity timeout and cleans up temp files', async () => {
+    let closeRes: (() => void) | undefined;
+    const baseUrl = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+      res.write('partial-');
+      closeRes = () => res.destroy();
+    });
+
+    const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-dl-stall-'));
+    tempDirs.push(tempDir);
+    const destPath = path.join(tempDir, 'stalled.bin');
+    try {
+      const result = await httpDownload(`${baseUrl}/stall`, destPath, { timeout: 150 });
+      expect(result.success).toBe(false);
+      expect(result.size).toBe(0);
+      expect(result.error).toBeTruthy();
+      expect(fs.existsSync(destPath)).toBe(false);
+      expect(fs.readdirSync(tempDir)).toEqual([]);
+    } finally {
+      closeRes?.();
+    }
   });
 });
 

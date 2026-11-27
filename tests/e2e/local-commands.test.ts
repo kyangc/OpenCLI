@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { parseJsonOutput, runCli } from './helpers.js';
 
 describe('offline adapter CLI contracts', () => {
@@ -60,5 +62,74 @@ describe('offline adapter CLI contracts', () => {
     const data = parseJsonOutput(stdout);
     expect(data.length).toBeGreaterThan(0);
     expect(data.every((d: any) => d.type === 'image')).toBe(true);
+  }, 30_000);
+
+  it('hot-reloads a modified lazy user adapter inside a real Node ESM process', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'opencli-e2e-hot-reload-'));
+    try {
+      const siteDir = path.join(tempDir, 'demo');
+      const modulePath = path.join(siteDir, 'ping.js');
+      await fs.mkdir(siteDir, { recursive: true });
+      const registryUrl = pathToFileURL(path.resolve('dist/src/registry.js')).href;
+      const executionUrl = pathToFileURL(path.resolve('dist/src/execution.js')).href;
+
+      await fs.writeFile(modulePath, `
+import { cli, Strategy } from ${JSON.stringify(registryUrl)};
+export default cli({
+  site: 'e2e-hot',
+  name: 'ping',
+  access: 'read',
+  browser: false,
+  strategy: Strategy.PUBLIC,
+  func: async () => [{ version: 1 }],
+});
+`);
+
+      const script = `
+import * as fs from 'node:fs/promises';
+import { executeCommand } from ${JSON.stringify(executionUrl)};
+import { Strategy } from ${JSON.stringify(registryUrl)};
+
+const lazyCmd = {
+  site: 'e2e-hot',
+  name: 'ping',
+  access: 'read',
+  description: 'hot reload e2e',
+  browser: false,
+  strategy: Strategy.PUBLIC,
+  args: [],
+  _lazy: true,
+  _modulePath: ${JSON.stringify(modulePath)},
+};
+
+const first = await executeCommand(lazyCmd, {});
+await fs.writeFile(${JSON.stringify(modulePath)}, \`
+import { cli, Strategy } from ${JSON.stringify(registryUrl)};
+export default cli({
+  site: 'e2e-hot',
+  name: 'ping',
+  access: 'read',
+  browser: false,
+  strategy: Strategy.PUBLIC,
+  func: async () => [{ version: 2 }],
+});
+\`);
+const next = new Date(Date.now() + 5000);
+await fs.utimes(${JSON.stringify(modulePath)}, next, next);
+const second = await executeCommand(lazyCmd, {});
+console.log(JSON.stringify({ first, second }));
+`;
+
+      const raw = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+        env: { ...process.env, OPENCLI_USER_CLIS_DIR: tempDir },
+        encoding: 'utf-8',
+      });
+      expect(JSON.parse(raw)).toEqual({
+        first: [{ version: 1 }],
+        second: [{ version: 2 }],
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   }, 30_000);
 });

@@ -7,6 +7,7 @@ import {
   buildCommandTimeoutFailure,
   buildExtensionDisconnectFailure,
   commandResultUnknownMessage,
+  dispatchCommandFrame,
   getResponseCorsHeaders,
   resolveProfileRoute,
 } from './daemon-utils.js';
@@ -126,5 +127,28 @@ describe('daemon command dispatch', () => {
       status: 408,
       countAsCommandResultUnknown: true,
     });
+  });
+
+  it('triggers onBeforeDispatchError on both synchronous throws and async ws.send callbacks', () => {
+    const syncErrors: unknown[] = [];
+    const syncRes = dispatchCommandFrame(
+      { send: () => { throw new Error('closed sync'); } },
+      '{}',
+      (err) => syncErrors.push(err),
+    );
+    expect(syncRes).toBe(false);
+    expect(syncErrors).toHaveLength(1);
+
+    const asyncErrors: unknown[] = [];
+    let storedCb: ((err?: Error) => void) | undefined;
+    const asyncRes = dispatchCommandFrame(
+      { send: (_data, cb) => { storedCb = cb; } },
+      '{}',
+      (err) => asyncErrors.push(err),
+    );
+    expect(asyncRes).toBe(true);
+    expect(asyncErrors).toHaveLength(0);
+    storedCb?.(new Error('write EPIPE'));
+    expect(asyncErrors).toHaveLength(1);
   });
 });

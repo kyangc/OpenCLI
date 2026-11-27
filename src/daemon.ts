@@ -33,6 +33,7 @@ import {
   buildCommandDispatchFailure,
   buildCommandTimeoutFailure,
   buildExtensionDisconnectFailure,
+  dispatchCommandFrame,
   getResponseCorsHeaders,
   resolveProfileRoute,
 } from './daemon-utils.js';
@@ -517,17 +518,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           settlePending(body.id, entry, { error: new DaemonCommandFailure(failure.message, failure.errorCode, failure.errorHint, failure.status) });
           log.warn(`[daemon] Failed to dispatch command ${body.id}: ${err instanceof Error ? err.message : String(err)}`);
         };
-        try {
-          route.connection!.ws.send(JSON.stringify(body), (err?: Error) => {
-            if (err && !entry.dispatched) failBeforeDispatch(err);
-          });
-          // Once ws accepts the frame, the command may execute even if the
-          // result is later lost; do not downgrade later disconnects to a
-          // pre-dispatch failure just because no result/ack has arrived yet.
-          entry.dispatched = true;
-        } catch (err) {
-          failBeforeDispatch(err);
-        }
+        // Once ws accepts the frame, the command may execute even if the
+        // result is later lost; do not downgrade later disconnects to a
+        // pre-dispatch failure just because no result/ack has arrived yet.
+        entry.dispatched = dispatchCommandFrame(route.connection!.ws, JSON.stringify(body), failBeforeDispatch);
       });
 
       jsonResponse(res, 200, result);
@@ -680,6 +674,7 @@ function shutdown(): void {
     settlePending(id, p, { error: failure });
   }
   pending.clear();
+  slotAdmission.shutdown();
   for (const profile of extensionProfiles.values()) profile.ws.close();
   // Let the rejection responses flush before exiting — a synchronous
   // process.exit() would kill the queued microtasks that write them.

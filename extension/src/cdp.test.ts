@@ -871,6 +871,29 @@ describe('cdp network capture correctness', () => {
     expect(completed[0].captureComplete).toBe(true);
     expect(await mod.readNetworkCapture(1, true)).toEqual([]);
   });
+
+  it('skips Network.getRequestPostData for requests without hasPostData and caps buffered entries at 500', async () => {
+    const mock = createNetworkMock();
+    vi.stubGlobal('chrome', mock.chrome);
+    const mod = await import('./cdp');
+    mod.registerListeners();
+    await mod.startNetworkCapture(1, 'api.example');
+
+    for (let i = 0; i < 510; i++) {
+      await mock.fire('Network.requestWillBeSent', {
+        requestId: `g-${i}`,
+        request: { url: `https://api.example/item/${i}`, method: 'GET' },
+      });
+    }
+
+    const postDataCalls = mock.debuggerApi.sendCommand.mock.calls.filter(([, m]) => m === 'Network.getRequestPostData');
+    expect(postDataCalls).toHaveLength(0);
+
+    const captured = await mod.readNetworkCapture(1, true);
+    expect(captured).toHaveLength(500);
+    expect(captured[0].url).toBe('https://api.example/item/10');
+    expect(captured[499].url).toBe('https://api.example/item/509');
+  });
 });
 
 describe('cdp evaluateInFrame stale context fallback', () => {

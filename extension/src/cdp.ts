@@ -18,6 +18,8 @@ let frameTargetCleanupRegistered = false;
 // on the direct-CDP path. Keep in sync.
 const CDP_RESPONSE_BODY_CAPTURE_LIMIT = 8 * 1024 * 1024;
 const CDP_REQUEST_BODY_CAPTURE_LIMIT = 1 * 1024 * 1024;
+const MAX_NETWORK_CAPTURE_ENTRIES = 500;
+const MAX_NETWORK_CAPTURE_TOTAL_BYTES = 32 * 1024 * 1024;
 
 type NetworkCaptureEntry = {
   kind: 'cdp';
@@ -551,9 +553,10 @@ async function ensureFrameTarget(
   frameId: string,
   aggressiveRetry: boolean = false,
   targetUrl?: string,
+  alreadyAttached: boolean = false,
 ): Promise<string> {
   registerFrameTargetCleanup();
-  await ensureAttached(tabId, aggressiveRetry);
+  if (!alreadyAttached) await ensureAttached(tabId, aggressiveRetry);
   const key = frameTargetKey(tabId, frameId);
   const existing = frameTargets.get(key);
   if (existing) return existing;
@@ -607,8 +610,9 @@ export async function sendCommandInFrameTarget(
   aggressiveRetry: boolean = false,
   timeoutMs: number = CDP_COMMAND_TIMEOUT_MS,
   targetUrl?: string,
+  alreadyAttached: boolean = false,
 ): Promise<unknown> {
-  const targetId = await ensureFrameTarget(tabId, frameId, aggressiveRetry, targetUrl);
+  const targetId = await ensureFrameTarget(tabId, frameId, aggressiveRetry, targetUrl, alreadyAttached);
   const target = { targetId } as chrome.debugger.Debuggee;
   return sendDebuggerCommand(target, method, params, timeoutMs);
 }
@@ -710,12 +714,12 @@ export async function evaluateInFrame(
   }
 
   // No cached context, or the cached one went stale: resolve via the frame target.
-  await sendCommandInFrameTarget(tabId, frameId, 'Runtime.enable', {}, aggressiveRetry, timeoutMs).catch(() => undefined);
+  await sendCommandInFrameTarget(tabId, frameId, 'Runtime.enable', {}, aggressiveRetry, timeoutMs, undefined, true).catch(() => undefined);
   const result = await sendCommandInFrameTarget(tabId, frameId, 'Runtime.evaluate', {
     expression,
     returnByValue: true,
     awaitPromise: true,
-  }, aggressiveRetry, timeoutMs) as {
+  }, aggressiveRetry, timeoutMs, undefined, true) as {
     result?: { type: string; value?: unknown; description?: string; subtype?: string };
     exceptionDetails?: { exception?: { description?: string }; text?: string };
   };
@@ -752,6 +756,26 @@ function normalizeHeaders(headers: unknown): Record<string, string> {
   return out;
 }
 
+function entryBufferBytes(entry: NetworkCaptureEntry): number {
+  return (entry.requestBodyPreview?.length ?? 0) + (entry.responsePreview?.length ?? 0);
+}
+
+function enforceNetworkCaptureBudget(state: NetworkCaptureState): void {
+  let totalBytes = 0;
+  for (const record of state.entries) totalBytes += entryBufferBytes(record.entry);
+  while (
+    state.entries.length > MAX_NETWORK_CAPTURE_ENTRIES
+    || (state.entries.length > 1 && totalBytes > MAX_NETWORK_CAPTURE_TOTAL_BYTES)
+  ) {
+    const evicted = state.entries.shift();
+    if (!evicted) break;
+    totalBytes -= entryBufferBytes(evicted.entry);
+    if (state.requestToEntry.get(evicted.entry.requestId) === evicted) {
+      state.requestToEntry.delete(evicted.entry.requestId);
+    }
+  }
+}
+
 function getOrCreateNetworkCaptureEntry(tabId: number, requestId: string, fallback?: {
   url?: string;
   method?: string;
@@ -777,6 +801,7 @@ function getOrCreateNetworkCaptureEntry(tabId: number, requestId: string, fallba
   };
   state.entries.push(record);
   state.requestToEntry.set(requestId, record);
+  enforceNetworkCaptureBudget(state);
   return record;
 }
 
@@ -894,22 +919,25 @@ export function registerListeners(): void {
           entry.requestBodyFullSize = fullSize;
           entry.requestBodyTruncated = truncated;
         }
-        record.pendingBodyFetches += 1;
-        try {
-          const postData = await sendDebuggerCommand({ tabId }, 'Network.getRequestPostData', { requestId }) as { postData?: string };
-          if (postData?.postData) {
-            const raw = postData.postData;
-            const fullSize = raw.length;
-            const truncated = fullSize > CDP_REQUEST_BODY_CAPTURE_LIMIT;
-            entry.requestBodyKind = 'string';
-            entry.requestBodyPreview = truncated ? raw.slice(0, CDP_REQUEST_BODY_CAPTURE_LIMIT) : raw;
-            entry.requestBodyFullSize = fullSize;
-            entry.requestBodyTruncated = truncated;
+        if (request?.hasPostData) {
+          record.pendingBodyFetches += 1;
+          try {
+            const postData = await sendDebuggerCommand({ tabId }, 'Network.getRequestPostData', { requestId }) as { postData?: string };
+            if (postData?.postData) {
+              const raw = postData.postData;
+              const fullSize = raw.length;
+              const truncated = fullSize > CDP_REQUEST_BODY_CAPTURE_LIMIT;
+              entry.requestBodyKind = 'string';
+              entry.requestBodyPreview = truncated ? raw.slice(0, CDP_REQUEST_BODY_CAPTURE_LIMIT) : raw;
+              entry.requestBodyFullSize = fullSize;
+              entry.requestBodyTruncated = truncated;
+              enforceNetworkCaptureBudget(state);
+            }
+          } catch {
+            // Optional; some requests do not expose postData.
+          } finally {
+            record.pendingBodyFetches -= 1;
           }
-        } catch {
-          // Optional; some requests do not expose postData.
-        } finally {
-          record.pendingBodyFetches -= 1;
         }
       }
       return;
@@ -954,6 +982,7 @@ export function registerListeners(): void {
           entry.responsePreview = body.base64Encoded ? `base64:${stored}` : stored;
           entry.responseBodyFullSize = fullSize;
           entry.responseBodyTruncated = truncated;
+          enforceNetworkCaptureBudget(state);
         } else {
           entry.responseBodyMissing = true;
           entry.responseBodyError = 'Response body unavailable';
