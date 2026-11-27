@@ -3,9 +3,19 @@
  */
 
 import * as fs from 'node:fs';
+import { createRequire } from 'node:module';
 import * as path from 'node:path';
-import TurndownService from 'turndown';
+import type TurndownService from 'turndown';
 import { ArgumentError, LoginWallError } from './errors.js';
+
+let _TurndownService: typeof TurndownService | undefined;
+function getTurndownService(): typeof TurndownService {
+  if (!_TurndownService) {
+    const mod = createRequire(import.meta.url)('turndown') as typeof TurndownService & { default?: typeof TurndownService };
+    _TurndownService = mod.default ?? mod;
+  }
+  return _TurndownService;
+}
 
 /** Type guard: checks if a value is a non-null, non-array object. */
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -50,7 +60,8 @@ export async function saveBase64ToFile(base64: string, filePath: string): Promis
 }
 
 export function createMarkdownConverter(configure?: (td: TurndownService) => void): TurndownService {
-  const td = new TurndownService({
+  const Td = getTurndownService();
+  const td = new Td({
     headingStyle: 'atx',
     codeBlockStyle: 'fenced',
     bulletListMarker: '-',

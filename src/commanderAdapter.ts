@@ -12,7 +12,6 @@
 
 import { Command } from 'commander';
 import { emitFailure } from './command-output.js';
-import { executeCommand, prepareCommandArgs } from './execution.js';
 import {
   commandHelpData,
   formatCommandHelpText,
@@ -80,6 +79,7 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
 
     // ── Execute + render ────────────────────────────────────────────────
     try {
+      const { executeCommand, prepareCommandArgs } = await import('./execution.js');
       // ── Collect kwargs ────────────────────────────────────────────────
       const rawKwargs: Record<string, unknown> = {};
       for (let i = 0; i < positionalArgs.length; i++) {
@@ -149,16 +149,35 @@ function renderError(err: unknown, verbose: boolean): void {
 }
 
 /**
- * Register all commands from the registry onto a Commander program.
+ * Return sorted unique site names from the command registry.
+ */
+export function getRegisteredSiteNames(): string[] {
+  const sites = new Set<string>();
+  for (const cmd of getRegistry().values()) {
+    sites.add(cmd.site);
+  }
+  return [...sites].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Register all (or one target site's) commands from the registry onto a Commander program.
  */
 export function registerAllCommands(
   program: Command,
+  opts: { onlySite?: string | null } = {},
 ): string[] {
+  if (opts.onlySite === null) {
+    return getRegisteredSiteNames();
+  }
+
   const seen = new Set<CliCommand>();
+  const allSites = new Set<string>();
   const commandsBySite = new Map<string, CliCommand[]>();
   for (const [, cmd] of getRegistry()) {
+    allSites.add(cmd.site);
     if (seen.has(cmd)) continue;
     seen.add(cmd);
+    if (opts.onlySite !== undefined && cmd.site !== opts.onlySite) continue;
     const commands = commandsBySite.get(cmd.site) ?? [];
     commands.push(cmd);
     commandsBySite.set(cmd.site, commands);
@@ -181,5 +200,5 @@ export function registerAllCommands(
       return formatSiteHelpText(site, commands);
     }) as Command['helpInformation'];
   }
-  return [...commandsBySite.keys()].sort((a, b) => a.localeCompare(b));
+  return [...allSites].sort((a, b) => a.localeCompare(b));
 }

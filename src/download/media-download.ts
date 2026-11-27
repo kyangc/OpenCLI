@@ -19,6 +19,7 @@ import {
   sanitizeFilename,
 } from './index.js';
 import type { BrowserCookie } from '../types.js';
+import { mapConcurrent } from '../utils.js';
 import { DownloadProgressTracker, formatBytes } from './progress.js';
 
 // ============================================================
@@ -48,6 +49,8 @@ export interface MediaDownloadOptions {
   ytdlpExtraArgs?: string[];
   /** Whether to show progress (default: true) */
   verbose?: boolean;
+  /** Maximum concurrent downloads (defaults to 1 when verbose/yt-dlp, else 4) */
+  concurrency?: number;
 }
 
 export interface MediaDownloadResult {
@@ -94,12 +97,10 @@ export async function downloadMedia(
   const outputDir = subdir ? path.join(output, subdir) : output;
   fs.mkdirSync(outputDir, { recursive: true });
 
-  // Pre-check yt-dlp availability (once, not per-item)
-  const hasYtdlp = checkYtdlp();
-
   // Auto-export browser cookies to Netscape format for yt-dlp
   let cookiesFile: string | undefined;
   const needsYtdlp = items.some(m => m.type === 'video-tweet' || m.type === 'video-ytdlp');
+  const hasYtdlp = needsYtdlp ? checkYtdlp() : false;
   if (needsYtdlp && browserCookies && browserCookies.length > 0) {
     const tempDir = getTempDir();
     fs.mkdirSync(tempDir, { recursive: true });
@@ -107,18 +108,24 @@ export async function downloadMedia(
     exportCookiesToNetscape(browserCookies, cookiesFile);
   }
 
+  const effectiveConcurrency = typeof options.concurrency === 'number'
+    && Number.isInteger(options.concurrency)
+    && options.concurrency >= 1
+    ? Math.min(options.concurrency, items.length)
+    : (verbose || needsYtdlp ? 1 : Math.min(4, items.length));
+
   const tracker = new DownloadProgressTracker(items.length, verbose);
-  const results: MediaDownloadResult[] = [];
+  let results: MediaDownloadResult[] = [];
 
   try {
-    for (let i = 0; i < items.length; i++) {
-      const media = items[i];
+    results = await mapConcurrent(items, effectiveConcurrency, async (media, i) => {
       const isVideo = media.type !== 'image';
       const ext = isVideo ? 'mp4' : 'jpg';
       const filename = resolveMediaFilename(media.filename, filenamePrefix, i + 1, ext);
       const destPath = path.join(outputDir, filename);
 
       const progressBar = tracker.onFileStart(filename, i);
+      const reportProgress = effectiveConcurrency === 1;
 
       try {
         let result: { success: boolean; size: number; error?: string };
@@ -129,7 +136,7 @@ export async function downloadMedia(
             cookiesFile,
             extraArgs: ytdlpExtraArgs,
             onProgress: (percent) => {
-              if (progressBar) progressBar.update(percent, 100);
+              if (reportProgress && progressBar) progressBar.update(percent, 100);
             },
           });
         } else {
@@ -139,7 +146,7 @@ export async function downloadMedia(
             cookies,
             timeout: dlTimeout,
             onProgress: (received, total) => {
-              if (progressBar) progressBar.update(received, total);
+              if (reportProgress && progressBar) progressBar.update(received, total);
             },
           });
         }
@@ -149,25 +156,25 @@ export async function downloadMedia(
         }
         tracker.onFileComplete(result.success);
 
-        results.push({
+        return {
           index: i + 1,
           type: media.type === 'video-tweet' || media.type === 'video-ytdlp' ? 'video' : media.type,
           status: result.success ? 'success' : 'failed',
           size: result.success ? formatBytes(result.size) : (result.error || 'unknown error'),
-        });
+        };
       } catch (err) {
         const msg = getErrorMessage(err);
         if (progressBar) progressBar.fail(msg);
         tracker.onFileComplete(false);
 
-        results.push({
+        return {
           index: i + 1,
           type: media.type,
           status: 'failed',
           size: msg,
-        });
+        };
       }
-    }
+    });
   } finally {
     tracker.finish();
 

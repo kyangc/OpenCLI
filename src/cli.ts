@@ -45,7 +45,68 @@ function applyRootSubcommandSummaries(program: Command): void {
   }
 }
 
-export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command {
+const BUILTIN_ROOT_COMMANDS = new Set([
+  'list',
+  'skills',
+  'auth',
+  'convention-audit',
+  'browser',
+  'doctor',
+  'completion',
+  'plugin',
+  'adapter',
+  'profile',
+  'daemon',
+]);
+
+function resolveCliTargetCommand(argv: readonly string[]): { command?: string; helpTarget?: string } {
+  let i = 0;
+  while (i < argv.length) {
+    const tok = argv[i];
+    if (tok === '--profile' && i + 1 < argv.length) {
+      i += 2;
+      continue;
+    }
+    if (tok.startsWith('--profile=')) {
+      i += 1;
+      continue;
+    }
+    if (tok.startsWith('-')) return {};
+    break;
+  }
+  const command = argv[i];
+  if (!command) return {};
+  if (command === 'help') {
+    const next = argv[i + 1];
+    return { command, helpTarget: next && !next.startsWith('-') ? next : undefined };
+  }
+  return { command };
+}
+
+export function createProgram(
+  BUILTIN_CLIS: string,
+  USER_CLIS: string,
+  opts: { argv?: readonly string[] } = {},
+): Command {
+  const target = opts.argv ? resolveCliTargetCommand(opts.argv) : null;
+  let onlySite: string | null | undefined;
+  let registerBrowser = true;
+  if (target) {
+    if (!target.command) {
+      onlySite = null;
+    } else if (target.command === 'help') {
+      onlySite = target.helpTarget && !BUILTIN_ROOT_COMMANDS.has(target.helpTarget)
+        ? target.helpTarget
+        : null;
+    } else if (BUILTIN_ROOT_COMMANDS.has(target.command)) {
+      onlySite = null;
+      registerBrowser = target.command === 'browser';
+    } else {
+      onlySite = target.command;
+      registerBrowser = false;
+    }
+  }
+
   const program = new Command();
   // Prevent the parent from consuming flags meant for subcommands.
   program
@@ -126,7 +187,9 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
   // Make websites accessible for AI agents.
   // All commands wrapped in browserAction() for consistent error handling.
 
-  const browser = registerBrowserCommands(program);
+  if (registerBrowser) {
+    registerBrowserCommands(program);
+  }
 
   // ── Built-in: doctor / completion ──────────────────────────────────────────
 
@@ -175,7 +238,7 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
 
   // ── Dynamic adapter commands ──────────────────────────────────────────────
 
-  const siteNames = registerAllCommands(program);
+  const siteNames = registerAllCommands(program, { onlySite });
   applyRootSubcommandSummaries(program);
 
   const adapterGroups: RootAdapterGroups = { sites: [...siteNames] };
@@ -197,7 +260,7 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
 }
 
 export async function runCli(BUILTIN_CLIS: string, USER_CLIS: string): Promise<void> {
-  try { await createProgram(BUILTIN_CLIS, USER_CLIS).parseAsync(); }
+  try { await createProgram(BUILTIN_CLIS, USER_CLIS, { argv: process.argv.slice(2) }).parseAsync(); }
   catch (error) {
     const code = (error as { code?: string }).code;
     if (code === 'commander.helpDisplayed' || code === 'commander.version') return;

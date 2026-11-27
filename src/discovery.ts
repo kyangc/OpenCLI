@@ -13,12 +13,13 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import yaml from 'js-yaml';
-import { type InternalCliCommand, Strategy, registerCommand } from './registry.js';
+import { type CliCommand, type InternalCliCommand, Strategy, getRegistry, registerCommand } from './registry.js';
 import { getErrorMessage } from './errors.js';
 import { log } from './logger.js';
 import type { ManifestEntry } from './manifest-types.js';
 import { findPackageRoot, getCliManifestPath } from './package-paths.js';
-import { linkHostOpencli } from './plugin-runtime.js';
+import { linkHostOpencli, resolveHostOpencliRoot } from './plugin-runtime.js';
+import { PKG_VERSION } from './version.js';
 
 /** User runtime directory: ~/.opencli */
 export const USER_OPENCLI_DIR = path.join(os.homedir(), '.opencli');
@@ -28,9 +29,24 @@ export const USER_CLIS_DIR = path.join(USER_OPENCLI_DIR, 'clis');
 export const PLUGINS_DIR = path.join(USER_OPENCLI_DIR, 'plugins');
 /** Matches files that register commands via cli() or lifecycle hooks */
 const PLUGIN_MODULE_PATTERN = /\b(?:cli|registerSiteAuthCommands|onStartup|onBeforeExecute|onAfterExecute)\s*\(/;
+const EAGER_HOOK_PATTERN = /\b(?:onStartup|onBeforeExecute|onAfterExecute)\s*\(/;
+const RELATIVE_REEXPORT_OR_IMPORT_RE = /\b(?:import|export)\b[^;'"]*?\bfrom\s*['"](\.[^'"]+)['"]/g;
 const YAML_ADAPTER_EXT_RE = /\.ya?ml$/i;
 const warnedYamlAdapterPaths = new Set<string>();
 const cliModuleLoadResults = new Map<string, Promise<boolean>>();
+
+export interface DiscoverClisOptions {
+  skipYamlWarnings?: boolean;
+  cacheFile?: string;
+}
+
+interface UserCliCacheFile {
+  version: 1;
+  pkgVersion: string;
+  fingerprint: string;
+  entries: ManifestEntry[];
+  eagerFiles: string[];
+}
 
 function parseStrategy(rawStrategy: string | undefined, fallback: Strategy = Strategy.COOKIE): Strategy {
   if (!rawStrategy) return fallback;
@@ -98,6 +114,13 @@ export async function ensureUserAdapters(): Promise<void> {
  * Uses pre-compiled manifest when available for instant startup.
  */
 export async function discoverClis(...dirs: string[]): Promise<void> {
+  return discoverClisWithOptions(dirs);
+}
+
+export async function discoverClisWithOptions(
+  dirs: string[],
+  opts: DiscoverClisOptions = {},
+): Promise<void> {
   // Fast path: try manifest first (production / post-build)
   for (const dir of dirs) {
     const manifestPath = getCliManifestPath(dir);
@@ -105,14 +128,44 @@ export async function discoverClis(...dirs: string[]): Promise<void> {
       await fs.promises.access(manifestPath);
       const loaded = await loadFromManifest(manifestPath, dir);
       if (loaded) {
-        await warnIgnoredYamlAdaptersInCliRoot(dir, loaded.manifestFiles);
+        if (!opts.skipYamlWarnings) {
+          await warnIgnoredYamlAdaptersInCliRoot(dir, loaded.manifestFiles);
+        }
         continue; // Skip filesystem scan only when manifest is usable
       }
     } catch {
       // Fall through to filesystem scan
     }
-    await discoverClisFromFs(dir);
+    await discoverClisFromFs(dir, opts);
   }
+}
+
+function registerManifestEntry(entry: ManifestEntry, clisDir: string): string {
+  const modulePath = path.resolve(clisDir, entry.modulePath!);
+  const cmd: InternalCliCommand = {
+    site: entry.site,
+    name: entry.name,
+    aliases: entry.aliases,
+    description: entry.description ?? '',
+    access: entry.access,
+    example: entry.example,
+    domain: entry.domain,
+    strategy: parseStrategy(entry.strategy),
+    browser: entry.browser,
+    args: entry.args ?? [],
+    columns: entry.columns,
+    defaultFormat: entry.defaultFormat,
+    pipeline: entry.pipeline,
+    source: entry.sourceFile ? path.resolve(clisDir, entry.sourceFile) : modulePath,
+    navigateBefore: entry.navigateBefore,
+    siteSession: entry.siteSession,
+    defaultWindowMode: entry.defaultWindowMode,
+    _lazy: true,
+    _modulePath: modulePath,
+  };
+  // normalizeCommand inside registerCommand handles strategy → browser/navigateBefore
+  registerCommand(cmd);
+  return modulePath;
 }
 
 /**
@@ -126,32 +179,9 @@ async function loadFromManifest(manifestPath: string, clisDir: string): Promise<
     const manifestFiles = new Set<string>();
     for (const entry of manifest) {
       if (!entry.modulePath) continue;
-      const modulePath = path.resolve(clisDir, entry.modulePath);
+      const modulePath = registerManifestEntry(entry, clisDir);
       manifestFiles.add(modulePath);
       if (entry.sourceFile) manifestFiles.add(path.resolve(clisDir, entry.sourceFile));
-      const cmd: InternalCliCommand = {
-        site: entry.site,
-        name: entry.name,
-        aliases: entry.aliases,
-        description: entry.description ?? '',
-        access: entry.access,
-        example: entry.example,
-        domain: entry.domain,
-        strategy: parseStrategy(entry.strategy),
-        browser: entry.browser,
-        args: entry.args ?? [],
-        columns: entry.columns,
-        defaultFormat: entry.defaultFormat,
-        pipeline: entry.pipeline,
-        source: entry.sourceFile ? path.resolve(clisDir, entry.sourceFile) : modulePath,
-        navigateBefore: entry.navigateBefore,
-        siteSession: entry.siteSession,
-        defaultWindowMode: entry.defaultWindowMode,
-        _lazy: true,
-        _modulePath: modulePath,
-      };
-      // normalizeCommand inside registerCommand handles strategy → browser/navigateBefore
-      registerCommand(cmd);
     }
     return { manifestFiles };
   } catch (err) {
@@ -160,14 +190,208 @@ async function loadFromManifest(manifestPath: string, clisDir: string): Promise<
   }
 }
 
+function toUserCacheManifestEntry(cmd: CliCommand, relPath: string): ManifestEntry {
+  return {
+    site: cmd.site,
+    name: cmd.name,
+    aliases: cmd.aliases,
+    description: cmd.description ?? '',
+    access: cmd.access,
+    example: cmd.example,
+    domain: cmd.domain,
+    strategy: (cmd.strategy ?? Strategy.COOKIE).toString().toLowerCase(),
+    browser: cmd.browser ?? true,
+    args: cmd.args.map((arg) => ({
+      name: arg.name,
+      type: arg.type ?? 'str',
+      default: arg.default,
+      required: !!arg.required,
+      valueRequired: !!arg.valueRequired || undefined,
+      positional: arg.positional || undefined,
+      help: arg.help ?? '',
+      choices: arg.choices,
+    })),
+    columns: cmd.columns,
+    pipeline: cmd.pipeline,
+    defaultFormat: cmd.defaultFormat,
+    type: 'js',
+    modulePath: relPath,
+    sourceFile: relPath,
+    navigateBefore: cmd.navigateBefore,
+    siteSession: cmd.siteSession,
+    defaultWindowMode: cmd.defaultWindowMode,
+  };
+}
+
+interface ScannedJsCandidate {
+  relPath: string;
+  filePath: string;
+  mtimeMs: number;
+  size: number;
+  source?: string;
+  isCli: boolean;
+  deps: Array<[string, number, number]>;
+}
+
+async function collectRelativeImportDeps(baseDir: string, source: string): Promise<Array<[string, number, number]>> {
+  const deps: Array<[string, number, number]> = [];
+  for (const match of source.matchAll(RELATIVE_REEXPORT_OR_IMPORT_RE)) {
+    const targetPath = path.resolve(baseDir, match[1]);
+    try {
+      const depStat = await fs.promises.stat(targetPath);
+      deps.push([targetPath, depStat.mtimeMs, depStat.size]);
+    } catch {
+      deps.push([targetPath, -1, -1]);
+    }
+  }
+  deps.sort((a, b) => a[0].localeCompare(b[0]));
+  return deps;
+}
+
+async function scanUserJsCandidates(dir: string, entries: fs.Dirent[]): Promise<ScannedJsCandidate[]> {
+  const siteDirs = entries
+    .filter((entry) => entry.isDirectory())
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const candidates: ScannedJsCandidate[] = [];
+  await Promise.all(siteDirs.map(async (entry) => {
+    const siteDir = path.join(dir, entry.name);
+    const files = (await fs.promises.readdir(siteDir)).sort();
+    await Promise.all(files.map(async (file) => {
+      if (!file.endsWith('.js') || file.endsWith('.d.js') || file.endsWith('.test.js')) return;
+      const filePath = path.join(siteDir, file);
+      const relPath = `${entry.name}/${file}`;
+      try {
+        const [stat, source] = await Promise.all([
+          fs.promises.stat(filePath),
+          fs.promises.readFile(filePath, 'utf-8'),
+        ]);
+        const isCli = PLUGIN_MODULE_PATTERN.test(source);
+        const deps = isCli ? await collectRelativeImportDeps(siteDir, source) : [];
+        candidates.push({ relPath, filePath, mtimeMs: stat.mtimeMs, size: stat.size, source, isCli, deps });
+      } catch {
+        // Ignore transient/unreadable files; regular scan handles errors.
+      }
+    }));
+  }));
+  candidates.sort((a, b) => a.relPath.localeCompare(b.relPath));
+  return candidates;
+}
+
+function buildUserCacheFingerprint(candidates: readonly ScannedJsCandidate[]): string {
+  return JSON.stringify(candidates.map((c) => [c.relPath, c.mtimeMs, c.size, c.isCli ? 1 : 0, c.deps]));
+}
+
+async function readValidUserCliCache(cacheFile: string, fingerprint: string): Promise<UserCliCacheFile | null> {
+  try {
+    const raw = await fs.promises.readFile(cacheFile, 'utf-8');
+    const parsed = JSON.parse(raw) as Partial<UserCliCacheFile>;
+    if (
+      parsed
+      && parsed.version === 1
+      && parsed.pkgVersion === PKG_VERSION
+      && parsed.fingerprint === fingerprint
+      && Array.isArray(parsed.entries)
+      && Array.isArray(parsed.eagerFiles)
+    ) {
+      return parsed as UserCliCacheFile;
+    }
+  } catch {
+    // Cache miss or corrupt cache
+  }
+  return null;
+}
+
+async function writeUserCliCache(cacheFile: string, cache: UserCliCacheFile): Promise<void> {
+  try {
+    const dir = path.dirname(cacheFile);
+    await fs.promises.mkdir(dir, { recursive: true });
+    const tmpFile = `${cacheFile}.${process.pid}.${Date.now()}.tmp`;
+    await fs.promises.writeFile(tmpFile, JSON.stringify(cache), { encoding: 'utf-8', mode: 0o600 });
+    await fs.promises.rename(tmpFile, cacheFile);
+  } catch {
+    // Best-effort cache write
+  }
+}
+
 /**
- * Fallback: traditional filesystem scan (used during development with tsx).
+ * Fallback: traditional filesystem scan (used during development with tsx, or user clis).
  */
-async function discoverClisFromFs(dir: string): Promise<void> {
+async function discoverClisFromFs(dir: string, opts: DiscoverClisOptions = {}): Promise<void> {
   try { await fs.promises.access(dir); } catch { return; }
   const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-  await warnIgnoredYamlAdaptersInCliRoot(dir);
-  
+  if (!opts.skipYamlWarnings) {
+    await warnIgnoredYamlAdaptersInCliRoot(dir);
+  }
+
+  if (opts.cacheFile) {
+    const candidates = await scanUserJsCandidates(dir, entries);
+    if (candidates.length === 0) return;
+    const fingerprint = buildUserCacheFingerprint(candidates);
+    const cached = await readValidUserCliCache(opts.cacheFile, fingerprint);
+    if (cached) {
+      for (const entry of cached.entries) {
+        if (!entry.modulePath) continue;
+        registerManifestEntry(entry, dir);
+      }
+      await Promise.all(cached.eagerFiles.map((relPath) =>
+        import(pathToFileURL(path.resolve(dir, relPath)).href).catch((err) => {
+          log.warn(`Failed to load module ${path.resolve(dir, relPath)}: ${getErrorMessage(err)}`);
+        }),
+      ));
+      return;
+    }
+
+    const cacheEntries: ManifestEntry[] = [];
+    const eagerFiles: string[] = [];
+    let hadLoadError = false;
+    const registry = getRegistry();
+    for (const candidate of candidates) {
+      if (!candidate.isCli) continue;
+      const before = new Map(registry.entries());
+      let importedOk = true;
+      await import(pathToFileURL(candidate.filePath).href).catch((err) => {
+        importedOk = false;
+        hadLoadError = true;
+        log.warn(`Failed to load module ${candidate.filePath}: ${getErrorMessage(err)}`);
+      });
+      if (!importedOk) continue;
+
+      const addedCmds: CliCommand[] = [];
+      const seenCmds = new Set<CliCommand>();
+      for (const [key, cmd] of registry.entries()) {
+        if (seenCmds.has(cmd)) continue;
+        const prev = before.get(key);
+        if (!prev || prev !== cmd) {
+          seenCmds.add(cmd);
+          addedCmds.push(cmd);
+        }
+      }
+      const isEager = EAGER_HOOK_PATTERN.test(candidate.source ?? '')
+        || addedCmds.some((cmd) => (
+          typeof cmd.validateArgs === 'function'
+          || typeof cmd.footerExtra === 'function'
+          || cmd.authStatus !== undefined
+        ));
+      if (isEager) {
+        eagerFiles.push(candidate.relPath);
+      } else {
+        for (const cmd of addedCmds) {
+          cacheEntries.push(toUserCacheManifestEntry(cmd, candidate.relPath));
+        }
+      }
+    }
+    if (!hadLoadError) {
+      await writeUserCliCache(opts.cacheFile, {
+        version: 1,
+        pkgVersion: PKG_VERSION,
+        fingerprint,
+        entries: cacheEntries,
+        eagerFiles,
+      });
+    }
+    return;
+  }
+
   const sitePromises = entries
     .filter(entry => entry.isDirectory())
     .map(async (entry) => {
@@ -199,20 +423,157 @@ async function discoverClisFromFs(dir: string): Promise<void> {
  * Each subdirectory is treated as a plugin (site = directory name).
  * Files inside are scanned flat (no nested site subdirs).
  */
-export async function discoverPlugins(pluginRoot: string = PLUGINS_DIR): Promise<void> {
+export async function discoverPlugins(
+  pluginRoot: string = PLUGINS_DIR,
+  opts: { cacheFile?: string } = {},
+): Promise<void> {
   try { await fs.promises.access(pluginRoot); } catch { return; }
   const entries = (await fs.promises.readdir(pluginRoot, { withFileTypes: true }))
     .sort((a, b) => a.name.localeCompare(b.name));
-  const discoverable: Array<{ entry: fs.Dirent; pluginDir: string }> = [];
-  for (const entry of entries) {
+  const discoverable = (await Promise.all(entries.map(async (entry) => {
     const pluginDir = path.join(pluginRoot, entry.name);
-    if (await isDiscoverablePluginDir(entry, pluginDir)) {
-      discoverable.push({ entry, pluginDir });
+    return (await isDiscoverablePluginDir(entry, pluginDir)) ? { entry, pluginDir } : null;
+  }))).filter((item): item is { entry: fs.Dirent; pluginDir: string } => item !== null);
+
+  const yamlWarnings = await Promise.all(discoverable.map(({ entry, pluginDir }) =>
+    collectIgnoredYamlAdaptersWarning(pluginDir, { owner: `plugin ${entry.name}`, pluginMode: true }),
+  ));
+  for (const warning of yamlWarnings) {
+    if (warning) log.warn(warning);
+  }
+
+  if (opts.cacheFile) {
+    const pluginFilesByDir = await Promise.all(discoverable.map(async ({ entry, pluginDir }) => {
+      const files = (await fs.promises.readdir(pluginDir)).sort();
+      const fileSet = new Set(files);
+      const jsCandidates: ScannedJsCandidate[] = [];
+      await Promise.all(files.map(async (file) => {
+        if (isYamlAdapterFile(file)) return;
+        if (file.endsWith('.ts') && !file.endsWith('.d.ts') && !file.endsWith('.test.ts')) {
+          const jsFile = file.replace(/\.ts$/, '.js');
+          if (!fileSet.has(jsFile)) {
+            log.warn(
+              `Plugin ${entry.name}/${file}: no compiled .js found. ` +
+              `Run "opencli plugin update ${entry.name}" to re-transpile, or install esbuild.`,
+            );
+          }
+          return;
+        }
+        if (!file.endsWith('.js') || file.endsWith('.d.js')) return;
+        const filePath = path.join(pluginDir, file);
+        const relPath = `${entry.name}/${file}`;
+        try {
+          const [stat, source] = await Promise.all([
+            fs.promises.stat(filePath),
+            fs.promises.readFile(filePath, 'utf-8'),
+          ]);
+          const isCli = PLUGIN_MODULE_PATTERN.test(source);
+          const deps = isCli ? await collectRelativeImportDeps(pluginDir, source) : [];
+          jsCandidates.push({ relPath, filePath, mtimeMs: stat.mtimeMs, size: stat.size, source, isCli, deps });
+        } catch {
+          // Ignore transient/unreadable files
+        }
+      }));
+      jsCandidates.sort((a, b) => a.relPath.localeCompare(b.relPath));
+      return { entry, pluginDir, jsCandidates };
+    }));
+
+    const allCandidates = pluginFilesByDir.flatMap((d) => d.jsCandidates);
+    if (allCandidates.length === 0) return;
+
+    let hostRoot = PACKAGE_ROOT;
+    try { hostRoot = resolveHostOpencliRoot(); } catch { /* fallback */ }
+    const fingerprint = JSON.stringify({
+      hostRoot,
+      files: allCandidates.map((c) => [c.relPath, c.mtimeMs, c.size, c.isCli ? 1 : 0, c.deps]),
+    });
+    const cached = await readValidUserCliCache(opts.cacheFile, fingerprint);
+    if (cached) {
+      for (const entry of cached.entries) {
+        if (!entry.modulePath) continue;
+        registerManifestEntry(entry, pluginRoot);
+      }
+      if (cached.eagerFiles.length > 0) {
+        const linkedDirs = new Set<string>();
+        await Promise.all(cached.eagerFiles.map(async (relPath) => {
+          const pluginName = relPath.split('/')[0];
+          const pluginDir = path.join(pluginRoot, pluginName);
+          if (!linkedDirs.has(pluginDir)) {
+            linkedDirs.add(pluginDir);
+            if (!linkHostOpencli(pluginDir)) {
+              log.warn(`Skipping plugin ${pluginName} because its host package could not be linked.`);
+              return;
+            }
+          }
+          await import(pathToFileURL(path.resolve(pluginRoot, relPath)).href).catch((err) => {
+            log.warn(`Plugin ${relPath}: ${getErrorMessage(err)}`);
+          });
+        }));
+      }
+      return;
     }
+
+    const cacheEntries: ManifestEntry[] = [];
+    const eagerFiles: string[] = [];
+    let hadLoadError = false;
+    const registry = getRegistry();
+
+    for (const { entry, pluginDir, jsCandidates } of pluginFilesByDir) {
+      const cliCandidates = jsCandidates.filter((c) => c.isCli);
+      if (cliCandidates.length === 0) continue;
+      if (!linkHostOpencli(pluginDir)) {
+        log.warn(`Skipping plugin ${entry.name} because its host package could not be linked.`);
+        hadLoadError = true;
+        continue;
+      }
+      for (const candidate of cliCandidates) {
+        const before = new Map(registry.entries());
+        let importedOk = true;
+        await import(pathToFileURL(candidate.filePath).href).catch((err) => {
+          importedOk = false;
+          hadLoadError = true;
+          log.warn(`Plugin ${candidate.relPath}: ${getErrorMessage(err)}`);
+        });
+        if (!importedOk) continue;
+
+        const addedCmds: CliCommand[] = [];
+        const seenCmds = new Set<CliCommand>();
+        for (const [key, cmd] of registry.entries()) {
+          if (seenCmds.has(cmd)) continue;
+          const prev = before.get(key);
+          if (!prev || prev !== cmd) {
+            seenCmds.add(cmd);
+            addedCmds.push(cmd);
+          }
+        }
+        const isEager = EAGER_HOOK_PATTERN.test(candidate.source ?? '')
+          || addedCmds.some((cmd) => (
+            typeof cmd.validateArgs === 'function'
+            || typeof cmd.footerExtra === 'function'
+            || cmd.authStatus !== undefined
+          ));
+        if (isEager) {
+          eagerFiles.push(candidate.relPath);
+        } else {
+          for (const cmd of addedCmds) {
+            cacheEntries.push(toUserCacheManifestEntry(cmd, candidate.relPath));
+          }
+        }
+      }
+    }
+
+    if (!hadLoadError) {
+      await writeUserCliCache(opts.cacheFile, {
+        version: 1,
+        pkgVersion: PKG_VERSION,
+        fingerprint,
+        entries: cacheEntries,
+        eagerFiles,
+      });
+    }
+    return;
   }
-  for (const { entry, pluginDir } of discoverable) {
-    await warnIgnoredYamlAdaptersInFlatDir(pluginDir, { owner: `plugin ${entry.name}`, pluginMode: true });
-  }
+
   await Promise.all(discoverable.map(async ({ entry, pluginDir }) => {
     if (!linkHostOpencli(pluginDir)) {
       log.warn(`Skipping plugin ${entry.name} because its host package could not be linked.`);
@@ -263,9 +624,15 @@ async function warnIgnoredYamlAdaptersInCliRoot(dir: string, manifestFiles?: Set
     return;
   }
 
-  for (const entry of entries.filter((candidate) => candidate.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
+  const dirs = entries
+    .filter((candidate) => candidate.isDirectory())
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const messages = await Promise.all(dirs.map(async (entry) => {
     const siteDir = path.join(dir, entry.name);
-    await warnIgnoredYamlAdaptersInFlatDir(siteDir, { owner: `site ${entry.name}`, manifestFiles });
+    return collectIgnoredYamlAdaptersWarning(siteDir, { owner: `site ${entry.name}`, manifestFiles });
+  }));
+  for (const message of messages) {
+    if (message) log.warn(message);
   }
 }
 
@@ -273,12 +640,20 @@ async function warnIgnoredYamlAdaptersInFlatDir(
   dir: string,
   options: { owner: string; manifestFiles?: Set<string>; pluginMode?: boolean },
 ): Promise<void> {
+  const message = await collectIgnoredYamlAdaptersWarning(dir, options);
+  if (message) log.warn(message);
+}
+
+async function collectIgnoredYamlAdaptersWarning(
+  dir: string,
+  options: { owner: string; manifestFiles?: Set<string>; pluginMode?: boolean },
+): Promise<string | null> {
   let files: string[];
   try {
     files = await fs.promises.readdir(dir);
   } catch (err) {
     log.warn(`Could not inspect YAML adapters for ${options.owner}: ${getErrorMessage(err)}`);
-    return;
+    return null;
   }
 
   const fileSet = new Set(files);
@@ -293,10 +668,10 @@ async function warnIgnoredYamlAdaptersInFlatDir(
     ignored.push(file);
   }
 
-  if (ignored.length === 0) return;
-  log.warn(
+  if (ignored.length === 0) return null;
+  return (
     `Ignoring ${ignored.length} YAML adapter${ignored.length === 1 ? '' : 's'} for ${options.owner}: `
-    + `${ignored.join(', ')}. .yaml/.yml adapters are no longer loaded; convert them to .js with the cli() API.`,
+    + `${ignored.join(', ')}. .yaml/.yml adapters are no longer loaded; convert them to .js with the cli() API.`
   );
 }
 

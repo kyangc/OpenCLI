@@ -80,11 +80,6 @@ export function escapeLeadingDashPositional(
   manifest: readonly DashPositionalManifestEntry[],
 ): string[] {
   const result = [...argv];
-  const requiredFirstPositional = new Map<string, DashPositionalManifestEntry>();
-  for (const cmd of manifest) {
-    const first = cmd.args?.find((a) => a.positional);
-    if (first?.required) requiredFirstPositional.set(cmd.site + '/' + cmd.name, cmd);
-  }
   let i = 0;
   while (i < result.length) {
     const tok = result[i];
@@ -94,10 +89,20 @@ export function escapeLeadingDashPositional(
     else { i += 1; }
   }
   const site = result[i];
-  const cmd = result[i + 1];
+  const cmdName = result[i + 1];
   const positionalIdx = i + 2;
-  if (!site || !cmd || positionalIdx >= result.length) return result;
-  const entry = requiredFirstPositional.get(site + '/' + cmd);
+  if (!site || !cmdName || positionalIdx >= result.length) return result;
+
+  let entry: DashPositionalManifestEntry | undefined;
+  for (let k = manifest.length - 1; k >= 0; k--) {
+    const candidate = manifest[k];
+    if (candidate.site === site && candidate.name === cmdName) {
+      if (candidate.args?.find((a) => a.positional)?.required) {
+        entry = candidate;
+      }
+      break;
+    }
+  }
   if (!entry) return result;
   const options = knownCommandOptions(entry);
 

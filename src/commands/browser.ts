@@ -4,7 +4,6 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { DEFAULT_BROWSER_CONNECT_TIMEOUT } from '../browser/config.js';
 import { bindTab, BrowserCommandError, sendCommand } from '../browser/daemon-client.js';
-import { buildExtractHtmlJs, runExtractFromHtml } from '../browser/extract.js';
 import { buildFindJs, buildSemanticFindJs, isFindError, type FindError, type FindResult, type SemanticFindOptions } from '../browser/find.js';
 import { buildHtmlTreeJs, type HtmlTreeResult } from '../browser/html-tree.js';
 import { DEFAULT_TTL_MS, findEntry, loadNetworkCache, saveNetworkCache, type CachedNetworkEntry } from '../browser/network-cache.js';
@@ -1837,6 +1836,7 @@ export function registerBrowserCommands(program: Command): Command {
       const start = Number.parseInt(rawStart, 10);
       const selector = typeof opts.selector === 'string' && opts.selector.length > 0 ? opts.selector : null;
 
+      const { buildExtractHtmlJs, runExtractFromHtml } = await import('../browser/extract.js');
       const js = buildExtractHtmlJs(selector);
       const res = await page.evaluate(js) as
         | { ok: true; url: string; title: string; html: string }

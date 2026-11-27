@@ -140,8 +140,7 @@ describe('BasePage annotatedScreenshot', () => {
   it('refreshes DOM refs, captures with a temporary visual overlay, and cleans up', async () => {
     const page = new ActionPage();
     page.results = [
-      'snapshot',
-      '["hash"]',
+      { __opencliSnapshot: true, output: 'snapshot', hashes: '["hash"]' },
       { annotated: 1, truncated: false },
       true,
     ];
@@ -149,10 +148,23 @@ describe('BasePage annotatedScreenshot', () => {
     await expect(page.annotatedScreenshot({ path: '/tmp/opencli.png', annotate: true })).resolves.toBe('shot');
 
     expect(page.scripts[0]).toContain('const VIEWPORT_EXPAND = 0');
+    expect(page.scripts[1]).toContain('__opencli_visual_ref_overlay');
+    expect(page.scripts[1]).toContain('[data-opencli-ref]');
     expect(page.scripts[2]).toContain('__opencli_visual_ref_overlay');
-    expect(page.scripts[2]).toContain('[data-opencli-ref]');
-    expect(page.scripts[3]).toContain('__opencli_visual_ref_overlay');
     expect(page.screenshotCalls).toEqual([{ path: '/tmp/opencli.png', annotate: false }]);
+  });
+
+  it('captures snapshot text and previousHashes in a single evaluate call', async () => {
+    const page = new ActionPage();
+    page.results = [
+      { __opencliSnapshot: true, output: 'first-snap', hashes: '["h1"]' },
+      { __opencliSnapshot: true, output: 'second-snap', hashes: '["h2"]' },
+    ];
+
+    expect(await page.snapshot()).toBe('first-snap');
+    expect(await page.snapshot()).toBe('second-snap');
+    expect(page.scripts).toHaveLength(2);
+    expect(page.scripts[1]).toContain('["h1"]');
   });
 });
 
@@ -178,17 +190,15 @@ describe('BasePage native input routing', () => {
       .mockResolvedValueOnce({ root: { nodeId: 1 } })
       .mockResolvedValueOnce({ nodeId: 7 })
       .mockResolvedValueOnce({})
-      .mockResolvedValueOnce({})
-      .mockResolvedValueOnce({ root: { nodeId: 1 } })
-      .mockResolvedValueOnce({ nodeId: 7 })
       .mockResolvedValueOnce({});
     page.results = [resolveOk, { ok: true, mode: 'input' }];
-    page.withArgsResults = [{ ok: true }, undefined, { ok: true }, undefined];
+    page.withArgsResults = [{ ok: true }, undefined];
 
     await page.typeText('#q', 'hello');
 
     expect(page.cdp).toHaveBeenCalledWith('DOM.scrollIntoViewIfNeeded', { nodeId: 7 });
     expect(page.cdp).toHaveBeenCalledWith('DOM.focus', { nodeId: 7 });
+    expect(vi.mocked(page.cdp).mock.calls.filter(([method]) => method === 'DOM.getDocument')).toHaveLength(1);
     expect(page.nativeType).toHaveBeenCalledWith('hello');
     expect(page.scripts.at(-1)).toContain('if (false) el.scrollIntoView');
     expect(page.scripts.at(-1)).toContain('if (false) {');
@@ -990,5 +1000,68 @@ describe('hidden native input failures', () => {
     page.nativeKeyPress = vi.fn().mockRejectedValue(new NativeInputVisibilityError());
     await expect(page.pressKey('Enter')).rejects.toBeInstanceOf(NativeInputVisibilityError);
     expect(page.scripts).toEqual([]);
+  });
+
+  it('skips separate visibilityState evaluation when boundingRectResolvedJs already verified visible', async () => {
+    const page = new ActionPage();
+    const evalSpy = vi.spyOn(page, 'evaluate');
+    page.cdp = vi.fn().mockResolvedValue({});
+    page.results = [resolveOk, { x: 20, y: 30, w: 100, h: 20, visible: true, visibilityState: 'visible' }];
+
+    await page.hover('#target');
+
+    expect(evalSpy.mock.calls.some(([script]) => String(script) === NATIVE_INPUT_VISIBILITY_JS)).toBe(false);
+    expect(vi.mocked(page.cdp)).toHaveBeenCalledWith('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 20, y: 30 });
+  });
+
+  it('rejects hidden visibilityState from boundingRectResolvedJs before dispatching native click or DOM fallback', async () => {
+    const page = new ActionPage();
+    page.nativeClick = vi.fn().mockResolvedValue(undefined);
+    page.results = [resolveOk, { x: 20, y: 30, w: 100, h: 20, visible: true, hit: 'target', visibilityState: 'hidden' }];
+
+    await expect(page.click('#target')).rejects.toBeInstanceOf(NativeInputVisibilityError);
+    expect(page.nativeClick).not.toHaveBeenCalled();
+    expect(page.scripts.some(script => script.includes('el.click()'))).toBe(false);
+  });
+
+  it('collects multi-frame AX trees concurrently while preserving frame order', async () => {
+    const page = new ActionPage();
+    let activeFetches = 0;
+    let maxConcurrent = 0;
+    page.cdp = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'Page.getFrameTree') {
+        return {
+          frameTree: {
+            frame: { id: 'root', url: 'https://app.example/' },
+            childFrames: [
+              { frame: { id: 'f1', url: 'https://app.example/one' } },
+              { frame: { id: 'f2', url: 'https://app.example/two' } },
+            ],
+          },
+        };
+      }
+      if (method === 'Accessibility.getFullAXTree') {
+        if (!params?.frameId) {
+          return { nodes: [{ nodeId: '1', role: { value: 'RootWebArea' }, name: { value: 'Root' }, childIds: [] }] };
+        }
+        activeFetches++;
+        maxConcurrent = Math.max(maxConcurrent, activeFetches);
+        await new Promise((r) => setTimeout(r, params.frameId === 'f1' ? 30 : 5));
+        activeFetches--;
+        return {
+          nodes: [{
+            nodeId: '10',
+            role: { value: 'button' },
+            name: { value: `Btn-${String(params.frameId)}` },
+            backendDOMNodeId: params.frameId === 'f1' ? 11 : 12,
+          }],
+        };
+      }
+      return {};
+    });
+
+    const out = String(await page.snapshot({ source: 'ax' }));
+    expect(maxConcurrent).toBe(2);
+    expect(out.indexOf('Btn-f1')).toBeLessThan(out.indexOf('Btn-f2'));
   });
 });

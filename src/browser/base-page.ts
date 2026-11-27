@@ -171,6 +171,7 @@ export abstract class BasePage implements IPage {
   private _prevSnapshotHashes: string | null = null;
   private _cdpTargetMarkerSeq = 0;
   private _axRefs = new Map<string, BrowserRef>();
+  protected _skipNextVisibilityCheck = false;
 
   // ── Transport-specific methods (must be implemented by subclasses) ──
 
@@ -326,7 +327,7 @@ export abstract class BasePage implements IPage {
     // Custom dropdowns often listen to pointer/mouse down/up; DOM el.click()
     // only fires click and can silently report success without opening/selecting.
     const rect = await this.evaluate(boundingRectResolvedJs({ skipScroll: nativeScrolled, forClick: true })) as
-      | { x: number; y: number; w: number; h: number; visible: boolean; hit?: 'target' | 'ancestor' | 'other' | 'none'; retargeted?: boolean }
+      | { x: number; y: number; w: number; h: number; visible: boolean; hit?: 'target' | 'ancestor' | 'other' | 'none'; retargeted?: boolean; visibilityState?: string }
       | null;
     const meta = { hit: rect?.hit, retargeted: rect?.retargeted } as const;
 
@@ -335,7 +336,7 @@ export abstract class BasePage implements IPage {
     // target there). Only an unrelated overlay ('other') forces the el.click()
     // fallback, which dispatches straight on the node. See issues #2076/#2071.
     if (rect?.visible === true && (rect.hit === 'target' || rect.hit === 'ancestor')) {
-      const success = await this.tryNativeClick(rect.x, rect.y);
+      const success = await this.withRectVisibility(rect.visibilityState, () => this.tryNativeClick(rect.x, rect.y));
       if (success) return { ...resolved, click_method: 'cdp', ...meta };
     }
 
@@ -352,14 +353,31 @@ export abstract class BasePage implements IPage {
 
     // JS click failed — try CDP native click if coordinates available
     if (result.x != null && result.y != null) {
-      const success = await this.tryNativeClick(result.x, result.y);
+      const success = await this.withRectVisibility(rect?.visibilityState, () => this.tryNativeClick(result.x!, result.y!));
       if (success) return { ...resolved, click_method: 'cdp', ...meta };
     }
 
     throw new Error(`Click failed: ${result.error ?? 'JS click and CDP fallback both failed'}`);
   }
 
+  protected async withRectVisibility<T>(visibilityState: unknown, run: () => Promise<T>): Promise<T> {
+    if (typeof visibilityState === 'string') {
+      if (visibilityState !== 'visible') throw new NativeInputVisibilityError();
+      this._skipNextVisibilityCheck = true;
+      try {
+        return await run();
+      } finally {
+        this._skipNextVisibilityCheck = false;
+      }
+    }
+    return run();
+  }
+
   protected async assertNativeInputVisible(): Promise<void> {
+    if (this._skipNextVisibilityCheck) {
+      this._skipNextVisibilityCheck = false;
+      return;
+    }
     let visibility: unknown;
     try { visibility = await this.evaluate(NATIVE_INPUT_VISIBILITY_JS); }
     catch { throw new NativeInputVisibilityError(); }
@@ -541,9 +559,12 @@ export abstract class BasePage implements IPage {
    * resolver stores the live Element in page JS. Bridge the two worlds with a
    * short-lived marker attribute, then query it through CDP.
    */
-  protected async tryCdpOnResolvedElement(method: 'DOM.focus' | 'DOM.scrollIntoViewIfNeeded'): Promise<boolean> {
+  protected async tryCdpMethodsOnResolvedElement<M extends 'DOM.focus' | 'DOM.scrollIntoViewIfNeeded'>(
+    methods: readonly M[],
+  ): Promise<Record<M, boolean>> {
+    const outcomes = Object.fromEntries(methods.map((method) => [method, false])) as Record<M, boolean>;
     const cdp = (this as IPage).cdp;
-    if (typeof cdp !== 'function') return false;
+    if (typeof cdp !== 'function' || methods.length === 0) return outcomes;
 
     const markerAttr = 'data-opencli-cdp-target';
     const markerValue = `${Date.now().toString(36)}-${++this._cdpTargetMarkerSeq}`;
@@ -562,24 +583,31 @@ export abstract class BasePage implements IPage {
         })()
       `, { markerAttr, markerValue }) as { ok?: boolean } | null;
       marked = marker?.ok === true;
-      if (!marked) return false;
+      if (!marked) return outcomes;
 
       await cdp.call(this, 'DOM.enable', {}).catch(() => undefined);
       const doc = await cdp.call(this, 'DOM.getDocument', {}) as { root?: { nodeId?: unknown } } | null;
       const rootNodeId = doc?.root?.nodeId;
-      if (typeof rootNodeId !== 'number') return false;
+      if (typeof rootNodeId !== 'number') return outcomes;
 
       const query = await cdp.call(this, 'DOM.querySelector', {
         nodeId: rootNodeId,
         selector,
       }) as { nodeId?: unknown } | null;
       const nodeId = query?.nodeId;
-      if (typeof nodeId !== 'number' || nodeId <= 0) return false;
+      if (typeof nodeId !== 'number' || nodeId <= 0) return outcomes;
 
-      await cdp.call(this, method, { nodeId });
-      return true;
+      for (const method of methods) {
+        try {
+          await cdp.call(this, method, { nodeId });
+          outcomes[method] = true;
+        } catch {
+          // Per-method best effort so one CDP failure does not discard earlier actions.
+        }
+      }
+      return outcomes;
     } catch {
-      return false;
+      return outcomes;
     } finally {
       if (marked) {
         await this.evaluateWithArgs(`
@@ -593,6 +621,11 @@ export abstract class BasePage implements IPage {
     }
   }
 
+  protected async tryCdpOnResolvedElement(method: 'DOM.focus' | 'DOM.scrollIntoViewIfNeeded'): Promise<boolean> {
+    const outcomes = await this.tryCdpMethodsOnResolvedElement([method]);
+    return outcomes[method];
+  }
+
   async typeText(ref: string, text: string, opts: ResolveOptions = {}): Promise<ResolveSuccess> {
     const resolved = await runResolve(this, ref, opts);
     let typed = false;
@@ -601,8 +634,9 @@ export abstract class BasePage implements IPage {
 
     if (typeof (this as IPage).nativeType === 'function' || typeof (this as IPage).insertText === 'function') {
       try {
-        nativeScrolled = await this.tryCdpOnResolvedElement('DOM.scrollIntoViewIfNeeded');
-        nativeFocused = await this.tryCdpOnResolvedElement('DOM.focus');
+        const cdpPrep = await this.tryCdpMethodsOnResolvedElement(['DOM.scrollIntoViewIfNeeded', 'DOM.focus']);
+        nativeScrolled = cdpPrep['DOM.scrollIntoViewIfNeeded'];
+        nativeFocused = cdpPrep['DOM.focus'];
         const preparation = await this.evaluate(prepareNativeTypeResolvedJs({
           skipScroll: nativeScrolled,
           skipFocus: nativeFocused,
@@ -626,9 +660,9 @@ export abstract class BasePage implements IPage {
     const resolved = await runResolve(this, ref, opts);
     const nativeScrolled = await this.tryCdpOnResolvedElement('DOM.scrollIntoViewIfNeeded');
     const rect = await this.evaluate(boundingRectResolvedJs({ skipScroll: nativeScrolled })) as
-      | { x: number; y: number; w: number; h: number; visible: boolean }
+      | { x: number; y: number; w: number; h: number; visible: boolean; visibilityState?: string }
       | null;
-    if (rect?.visible === true && await this.tryNativeMouseMove(rect.x, rect.y)) return resolved;
+    if (rect?.visible === true && await this.withRectVisibility(rect.visibilityState, () => this.tryNativeMouseMove(rect.x, rect.y))) return resolved;
 
     await this.evaluate(`
       (() => {
@@ -672,9 +706,9 @@ export abstract class BasePage implements IPage {
     const resolved = await runResolve(this, ref, opts);
     const nativeScrolled = await this.tryCdpOnResolvedElement('DOM.scrollIntoViewIfNeeded');
     const rect = await this.evaluate(boundingRectResolvedJs({ skipScroll: nativeScrolled })) as
-      | { x: number; y: number; w: number; h: number; visible: boolean }
+      | { x: number; y: number; w: number; h: number; visible: boolean; visibilityState?: string }
       | null;
-    if (rect?.visible === true && await this.tryNativeDoubleClick(rect.x, rect.y)) return resolved;
+    if (rect?.visible === true && await this.withRectVisibility(rect.visibilityState, () => this.tryNativeDoubleClick(rect.x, rect.y))) return resolved;
 
     await this.evaluate(`
       (() => {
@@ -990,8 +1024,9 @@ export abstract class BasePage implements IPage {
     let nativeFocused = false;
 
     try {
-      nativeScrolled = await this.tryCdpOnResolvedElement('DOM.scrollIntoViewIfNeeded');
-      nativeFocused = await this.tryCdpOnResolvedElement('DOM.focus');
+      const cdpPrep = await this.tryCdpMethodsOnResolvedElement(['DOM.scrollIntoViewIfNeeded', 'DOM.focus']);
+      nativeScrolled = cdpPrep['DOM.scrollIntoViewIfNeeded'];
+      nativeFocused = cdpPrep['DOM.focus'];
     } catch {
       // CDP focus/scroll is best-effort; DOM preparation below remains authoritative.
     }
@@ -1148,16 +1183,15 @@ export abstract class BasePage implements IPage {
       previousHashes: this._prevSnapshotHashes,
     });
 
+    const wrappedSnapshotJs = `(() => { const __out = (${snapshotJs}); let __hashes = null; try { __hashes = typeof window.__opencli_prev_hashes === 'string' ? window.__opencli_prev_hashes : null; } catch {} return { __opencliSnapshot: true, output: __out, hashes: __hashes }; })()`;
     try {
-      const result = await this.evaluate(snapshotJs);
-      // Read back the hashes stored by the snapshot for next diff
-      try {
-        const hashes = await this.evaluate('window.__opencli_prev_hashes') as string | null;
-        this._prevSnapshotHashes = typeof hashes === 'string' ? hashes : null;
-      } catch {
-        // Non-fatal: diff is best-effort
+      const rawResult = await this.evaluate(wrappedSnapshotJs);
+      if (rawResult && typeof rawResult === 'object' && (rawResult as { __opencliSnapshot?: unknown }).__opencliSnapshot === true) {
+        const payload = rawResult as { output: unknown; hashes: unknown };
+        this._prevSnapshotHashes = typeof payload.hashes === 'string' ? payload.hashes : null;
+        return payload.output;
       }
-      return result;
+      return rawResult;
     } catch (err) {
       // Log snapshot failure for debugging, then fallback to basic accessibility tree
       if (process.env.DEBUG_SNAPSHOT) {
@@ -1176,12 +1210,15 @@ export abstract class BasePage implements IPage {
 
     const frameTreeResult = await cdp.call(this, 'Page.getFrameTree', {}).catch(() => null);
     const frames = collectAxFrameRefs(frameTreeResult);
-    for (const frame of frames) {
+    const childTrees = await Promise.all(frames.map(async (frame): Promise<AxSnapshotTree | null> => {
       if (frame.sessionId) {
         await cdp.call(this, 'Accessibility.enable', axEnableParams(frame)).catch(() => null);
       }
       const tree = await cdp.call(this, 'Accessibility.getFullAXTree', axTreeParams(frame)).catch(() => null);
-      if (tree) trees.push({ tree, frame });
+      return tree ? { tree, frame } : null;
+    }));
+    for (const childTree of childTrees) {
+      if (childTree) trees.push(childTree);
     }
 
     return trees;

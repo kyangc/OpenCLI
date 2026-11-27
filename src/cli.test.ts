@@ -917,11 +917,25 @@ describe('adapter eject', () => {
 
 describe('profile list', () => {
   const stdoutSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  const configTempDirs: string[] = [];
+  let prevConfigDir: string | undefined;
 
   beforeEach(() => {
+    prevConfigDir = process.env.OPENCLI_CONFIG_DIR;
+    const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencli-profile-list-cfg-'));
+    configTempDirs.push(cfgDir);
+    process.env.OPENCLI_CONFIG_DIR = cfgDir;
     process.exitCode = undefined;
     stdoutSpy.mockClear();
     vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    if (prevConfigDir === undefined) delete process.env.OPENCLI_CONFIG_DIR;
+    else process.env.OPENCLI_CONFIG_DIR = prevConfigDir;
+    for (const dir of configTempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('reports stale daemon instead of no profiles when status lacks profile support', async () => {
@@ -977,14 +991,23 @@ describe('profile list', () => {
 describe('browser tab targeting commands', () => {
   const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
   const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  const isolatedTempDirs: string[] = [];
+  let prevConfigDir: string | undefined;
+  let prevCacheDir: string | undefined;
 
   function getBrowserStateFile(cacheDir: string, session: string = 'test'): string {
     return path.join(cacheDir, 'browser-state', `${session}.json`);
   }
 
   beforeEach(() => {
+    prevConfigDir = process.env.OPENCLI_CONFIG_DIR;
+    prevCacheDir = process.env.OPENCLI_CACHE_DIR;
     process.exitCode = undefined;
-    process.env.OPENCLI_CACHE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'opencli-browser-tab-state-'));
+    const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencli-browser-tab-cfg-'));
+    const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencli-browser-tab-state-'));
+    isolatedTempDirs.push(cfgDir, cacheDir);
+    process.env.OPENCLI_CONFIG_DIR = cfgDir;
+    process.env.OPENCLI_CACHE_DIR = cacheDir;
     consoleLogSpy.mockClear();
     stderrSpy.mockClear();
     mockBrowserConnect.mockClear();
@@ -1033,6 +1056,16 @@ describe('browser tab targeting commands', () => {
       }),
       session: 'test',
     } as unknown as IPage;
+  });
+
+  afterEach(() => {
+    if (prevConfigDir === undefined) delete process.env.OPENCLI_CONFIG_DIR;
+    else process.env.OPENCLI_CONFIG_DIR = prevConfigDir;
+    if (prevCacheDir === undefined) delete process.env.OPENCLI_CACHE_DIR;
+    else process.env.OPENCLI_CACHE_DIR = prevCacheDir;
+    for (const dir of isolatedTempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   function lastJsonLog(): any {
@@ -3380,5 +3413,50 @@ describe('normalizeVerifyRows', () => {
 
   it('wraps a single object as a one-row array', () => {
     expect(normalizeVerifyRows({ ok: true })).toEqual([{ ok: true }]);
+  });
+});
+
+describe('createProgram on-demand registration', () => {
+  afterEach(() => {
+    getRegistry().delete('ondemand-a/ping');
+    getRegistry().delete('ondemand-b/ping');
+  });
+
+  it('skips adapter subcommand registration for root --help while preserving full site list', () => {
+    cli({ site: 'ondemand-a', name: 'ping', access: 'read', description: 'a', browser: false, func: async () => [] });
+    cli({ site: 'ondemand-b', name: 'ping', access: 'read', description: 'b', browser: false, func: async () => [] });
+
+    const program = createProgram('', '', { argv: ['--help'] });
+    const names = new Set(program.commands.map((c) => c.name()));
+
+    expect(names.has('ondemand-a')).toBe(false);
+    expect(names.has('ondemand-b')).toBe(false);
+    expect(names.has('browser')).toBe(true);
+    const help = program.helpInformation();
+    expect(help).toContain('ondemand-a');
+    expect(help).toContain('ondemand-b');
+  });
+
+  it('registers only the target site and skips browser subcommands when invoking a site adapter', () => {
+    cli({ site: 'ondemand-a', name: 'ping', access: 'read', description: 'a', browser: false, func: async () => [] });
+    cli({ site: 'ondemand-b', name: 'ping', access: 'read', description: 'b', browser: false, func: async () => [] });
+
+    const program = createProgram('', '', { argv: ['--profile', 'work', 'ondemand-a', 'ping'] });
+    const names = new Set(program.commands.map((c) => c.name()));
+
+    expect(names.has('ondemand-a')).toBe(true);
+    expect(names.has('ondemand-b')).toBe(false);
+    expect(names.has('browser')).toBe(false);
+  });
+
+  it('skips both adapter sites and browser subcommands when invoking another built-in command', () => {
+    cli({ site: 'ondemand-a', name: 'ping', access: 'read', description: 'a', browser: false, func: async () => [] });
+
+    const program = createProgram('', '', { argv: ['daemon', 'status'] });
+    const names = new Set(program.commands.map((c) => c.name()));
+
+    expect(names.has('daemon')).toBe(true);
+    expect(names.has('ondemand-a')).toBe(false);
+    expect(names.has('browser')).toBe(false);
   });
 });

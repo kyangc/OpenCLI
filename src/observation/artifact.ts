@@ -93,6 +93,10 @@ export function exportObservationSession(session: ObservationSession, opts: Expo
 }
 
 function redactObservationEvent(event: ObservationEvent): ObservationEvent {
+  if (event.stream === 'screenshot') {
+    const { data: _omitted, ...rest } = event;
+    return redactValue(rest) as ObservationEvent;
+  }
   return redactValue(event) as ObservationEvent;
 }
 

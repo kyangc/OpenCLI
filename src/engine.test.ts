@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { discoverClis, discoverPlugins, ensureUserCliCompatShims, ensureUserAdapters, PLUGINS_DIR } from './discovery.js';
+import { discoverClis, discoverClisWithOptions, discoverPlugins, ensureUserCliCompatShims, ensureUserAdapters, PLUGINS_DIR } from './discovery.js';
 import { executeCommand } from './execution.js';
 import { getRegistry, cli, Strategy } from './registry.js';
 import { clearAllHooks, onAfterExecute } from './hooks.js';
@@ -597,6 +597,170 @@ describe('executeCommand', () => {
     expect((seen[0].error as Error).message).toBe('boom');
     expect(typeof seen[0].finishedAt).toBe('number');
   });
+});
 
+describe('discoverClisWithOptions user cache', () => {
+  it('registers lazy commands from cache without importing adapter files on cache hit, and invalidates on edits', async () => {
+    const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-user-cache-'));
+    const siteDir = path.join(tempRoot, 'clis', 'cached-site');
+    const depDir = path.join(tempRoot, 'ext-target');
+    const cacheFile = path.join(tempRoot, 'cache', 'user-cli-manifest.json');
+    const registryUrl = pathToFileURL(path.join(process.cwd(), 'src', 'registry.ts')).href;
+    const hooksUrl = pathToFileURL(path.join(process.cwd(), 'src', 'hooks.ts')).href;
 
+    try {
+      await fs.promises.mkdir(siteDir, { recursive: true });
+      await fs.promises.mkdir(depDir, { recursive: true });
+
+      const targetFile = path.join(depDir, 'target.js');
+      await fs.promises.writeFile(targetFile, `export const label = 'v1';\n`);
+
+      const lazyAdapter = path.join(siteDir, 'lazy.js');
+      await fs.promises.writeFile(lazyAdapter, `
+import { cli, Strategy } from '${registryUrl}';
+import { label } from '../../ext-target/target.js';
+globalThis.__opencli_user_cache_lazy_imports__ = (globalThis.__opencli_user_cache_lazy_imports__ || 0) + 1;
+cli({
+  site: 'cached-site',
+  name: 'lazy',
+  access: 'read',
+  description: 'cached lazy command ' + label,
+  strategy: Strategy.PUBLIC,
+  browser: false,
+  func: async () => [{ ok: label }],
+});
+`);
+
+      const eagerAdapter = path.join(siteDir, 'eager.js');
+      await fs.promises.writeFile(eagerAdapter, `
+import { cli, Strategy } from '${registryUrl}';
+import { onStartup } from '${hooksUrl}';
+onStartup(() => {});
+cli({
+  site: 'cached-site',
+  name: 'eager',
+  access: 'read',
+  description: 'eager hook command',
+  strategy: Strategy.PUBLIC,
+  browser: false,
+  func: async () => [{ eager: true }],
+});
+`);
+
+      (globalThis as { __opencli_user_cache_lazy_imports__?: number }).__opencli_user_cache_lazy_imports__ = 0;
+      const clisDir = path.join(tempRoot, 'clis');
+
+      // 1. Cold miss: imports both lazy and eager files and writes cache.
+      await discoverClisWithOptions([clisDir], { cacheFile, skipYamlWarnings: true });
+      expect((globalThis as { __opencli_user_cache_lazy_imports__?: number }).__opencli_user_cache_lazy_imports__).toBe(1);
+      expect(fs.existsSync(cacheFile)).toBe(true);
+      expect(getRegistry().get('cached-site/lazy')?.description).toBe('cached lazy command v1');
+      const writtenCache = JSON.parse(fs.readFileSync(cacheFile, 'utf-8')) as {
+        fingerprint: string;
+        entries: Array<{ site: string; name: string }>;
+        eagerFiles: string[];
+      };
+      expect(writtenCache.entries.map((e) => `${e.site}/${e.name}`)).toEqual(['cached-site/lazy']);
+      expect(writtenCache.eagerFiles).toEqual(['cached-site/eager.js']);
+
+      // 2. Warm hit: clears lazy command and re-discovers; lazy.js is NOT imported again.
+      getRegistry().delete('cached-site/lazy');
+      await discoverClisWithOptions([clisDir], { cacheFile, skipYamlWarnings: true });
+      expect((globalThis as { __opencli_user_cache_lazy_imports__?: number }).__opencli_user_cache_lazy_imports__).toBe(1);
+      const cachedCmd = getRegistry().get('cached-site/lazy') as { _lazy?: boolean; description?: string } | undefined;
+      expect(cachedCmd?._lazy).toBe(true);
+      expect(cachedCmd?.description).toBe('cached lazy command v1');
+
+      // 3. Re-export / relative import target change invalidates cache fingerprint and refreshes cache.
+      await fs.promises.writeFile(targetFile, `export const label = 'v2';\n`);
+      const nextTime = new Date(Date.now() + 5000);
+      await fs.promises.utimes(targetFile, nextTime, nextTime);
+      await fs.promises.writeFile(path.join(siteDir, 'added.js'), `
+import { cli, Strategy } from '${registryUrl}';
+cli({
+  site: 'cached-site',
+  name: 'added',
+  access: 'read',
+  description: 'added command',
+  strategy: Strategy.PUBLIC,
+  browser: false,
+  func: async () => [{ ok: true }],
+});
+`);
+      await discoverClisWithOptions([clisDir], { cacheFile, skipYamlWarnings: true });
+      const refreshedCache = JSON.parse(fs.readFileSync(cacheFile, 'utf-8')) as {
+        fingerprint: string;
+        entries: Array<{ site: string; name: string }>;
+      };
+      expect(refreshedCache.fingerprint).not.toBe(writtenCache.fingerprint);
+      expect(refreshedCache.entries.map((e) => `${e.site}/${e.name}`)).toContain('cached-site/added');
+    } finally {
+      delete (globalThis as { __opencli_user_cache_lazy_imports__?: number }).__opencli_user_cache_lazy_imports__;
+      getRegistry().delete('cached-site/lazy');
+      getRegistry().delete('cached-site/eager');
+      getRegistry().delete('cached-site/added');
+      await fs.promises.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('caches lazy plugin commands across discoverPlugins runs and invalidates on edits', async () => {
+    const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-plugin-cache-'));
+    const pluginRoot = path.join(tempRoot, 'plugins');
+    const pluginDir = path.join(pluginRoot, 'cached-plug');
+    const cacheFile = path.join(tempRoot, 'cache', 'plugin-cli-manifest.json');
+    const registryUrl = pathToFileURL(path.join(process.cwd(), 'src', 'registry.ts')).href;
+
+    try {
+      await fs.promises.mkdir(pluginDir, { recursive: true });
+      const cmdFile = path.join(pluginDir, 'hello.js');
+      await fs.promises.writeFile(cmdFile, `
+import { cli, Strategy } from '${registryUrl}';
+globalThis.__opencli_plugin_cache_imports__ = (globalThis.__opencli_plugin_cache_imports__ || 0) + 1;
+cli({
+  site: 'cached-plug',
+  name: 'hello',
+  access: 'read',
+  description: 'cached plugin hello',
+  strategy: Strategy.PUBLIC,
+  browser: false,
+  func: async () => [{ ok: true }],
+});
+`);
+
+      (globalThis as { __opencli_plugin_cache_imports__?: number }).__opencli_plugin_cache_imports__ = 0;
+
+      await discoverPlugins(pluginRoot, { cacheFile });
+      expect((globalThis as { __opencli_plugin_cache_imports__?: number }).__opencli_plugin_cache_imports__).toBe(1);
+      expect(fs.existsSync(cacheFile)).toBe(true);
+      const firstFingerprint = JSON.parse(fs.readFileSync(cacheFile, 'utf-8')).fingerprint;
+
+      getRegistry().delete('cached-plug/hello');
+      await discoverPlugins(pluginRoot, { cacheFile });
+      expect((globalThis as { __opencli_plugin_cache_imports__?: number }).__opencli_plugin_cache_imports__).toBe(1);
+      expect((getRegistry().get('cached-plug/hello') as { _lazy?: boolean } | undefined)?._lazy).toBe(true);
+
+      await fs.promises.writeFile(cmdFile, `
+import { cli, Strategy } from '${registryUrl}';
+globalThis.__opencli_plugin_cache_imports__ = (globalThis.__opencli_plugin_cache_imports__ || 0) + 1;
+cli({
+  site: 'cached-plug',
+  name: 'hello',
+  access: 'read',
+  description: 'cached plugin hello v2',
+  strategy: Strategy.PUBLIC,
+  browser: false,
+  func: async () => [{ ok: true }],
+});
+`);
+      const nextTime = new Date(Date.now() + 5000);
+      await fs.promises.utimes(cmdFile, nextTime, nextTime);
+      await discoverPlugins(pluginRoot, { cacheFile });
+      const secondFingerprint = JSON.parse(fs.readFileSync(cacheFile, 'utf-8')).fingerprint;
+      expect(secondFingerprint).not.toBe(firstFingerprint);
+    } finally {
+      delete (globalThis as { __opencli_plugin_cache_imports__?: number }).__opencli_plugin_cache_imports__;
+      getRegistry().delete('cached-plug/hello');
+      await fs.promises.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
 });

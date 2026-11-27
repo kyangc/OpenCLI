@@ -1,4 +1,19 @@
-import { Agent, EnvHttpProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici';
+import { createRequire } from 'node:module';
+import type { Dispatcher } from 'undici';
+
+interface UndiciModule {
+  Agent: new () => Dispatcher;
+  EnvHttpProxyAgent: new (opts: { httpProxy?: string; httpsProxy?: string; noProxy?: string }) => Dispatcher;
+  fetch: typeof import('undici').fetch;
+}
+
+let _undici: UndiciModule | undefined;
+function getUndici(): UndiciModule {
+  if (!_undici) {
+    _undici = createRequire(import.meta.url)('undici') as UndiciModule;
+  }
+  return _undici;
+}
 
 const LOOPBACK_NO_PROXY_ENTRIES = ['127.0.0.1', 'localhost', '::1'];
 
@@ -26,7 +41,7 @@ interface ProxyConfig {
 }
 
 let installed = false;
-const directDispatcher = new Agent();
+let directDispatcher: Dispatcher | undefined;
 const proxyDispatcherCache = new Map<string, Dispatcher>();
 const nativeFetch = globalThis.fetch.bind(globalThis);
 
@@ -108,8 +123,7 @@ function effectiveNoProxyValue(entries: NoProxyEntry[]): string | undefined {
   return entries.map(serializeNoProxyEntry).join(',');
 }
 
-function resolveProxyConfig(env: NodeJS.ProcessEnv = process.env): ProxyConfig {
-  const noProxyEntries = effectiveNoProxyEntries(env);
+function readProxyPair(env: NodeJS.ProcessEnv = process.env): Pick<ProxyConfig, 'httpProxy' | 'httpsProxy'> {
   return {
     httpProxy: readProxyEnv(env, PROXY_ENV_BY_PROTOCOL['http:']),
     httpsProxy: readProxyEnv(env, [
@@ -120,6 +134,16 @@ function resolveProxyConfig(env: NodeJS.ProcessEnv = process.env): ProxyConfig {
       'all_proxy',
       'ALL_PROXY',
     ]),
+  };
+}
+
+function resolveProxyConfig(env: NodeJS.ProcessEnv = process.env): ProxyConfig {
+  const { httpProxy, httpsProxy } = readProxyPair(env);
+  if (!httpProxy && !httpsProxy) return {};
+  const noProxyEntries = effectiveNoProxyEntries(env);
+  return {
+    httpProxy,
+    httpsProxy,
     noProxy: effectiveNoProxyValue(noProxyEntries),
   };
 }
@@ -132,6 +156,7 @@ function createProxyDispatcher(config: ProxyConfig): Dispatcher {
   ]);
   const cached = proxyDispatcherCache.get(cacheKey);
   if (cached) return cached;
+  const { EnvHttpProxyAgent } = getUndici();
   const dispatcher = new EnvHttpProxyAgent({
     httpProxy: config.httpProxy,
     httpsProxy: config.httpsProxy,
@@ -149,26 +174,29 @@ function resolveUrl(input: RequestInfo | URL): URL | null {
 }
 
 export function hasProxyEnv(env: NodeJS.ProcessEnv = process.env): boolean {
-  const config = resolveProxyConfig(env);
-  return Boolean(config.httpProxy || config.httpsProxy);
+  const pair = readProxyPair(env);
+  return Boolean(pair.httpProxy || pair.httpsProxy);
 }
 
 export function getNetworkDispatcher(env: NodeJS.ProcessEnv = process.env): Dispatcher {
   const config = resolveProxyConfig(env);
-  if (!config.httpProxy && !config.httpsProxy) return directDispatcher;
+  if (!config.httpProxy && !config.httpsProxy) {
+    return directDispatcher ??= new (getUndici().Agent)();
+  }
   return createProxyDispatcher(config);
 }
 
 export async function fetchWithNodeNetwork(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const url = resolveUrl(input);
-  if (!url || !hasProxyEnv()) {
+  const config = url ? resolveProxyConfig(process.env) : {};
+  if (!url || (!config.httpProxy && !config.httpsProxy)) {
     return nativeFetch(input, init);
   }
 
-  return (await undiciFetch(input as Parameters<typeof undiciFetch>[0], {
+  return (await getUndici().fetch(input as Parameters<UndiciModule['fetch']>[0], {
     ...init,
-    dispatcher: getNetworkDispatcher(),
-  } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
+    dispatcher: createProxyDispatcher(config),
+  } as Parameters<UndiciModule['fetch']>[1])) as unknown as Response;
 }
 
 export function installNodeNetwork(): void {

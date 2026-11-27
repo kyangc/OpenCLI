@@ -26,15 +26,18 @@ export function redactUrl(url: string): string {
   return url.replace(SENSITIVE_URL_PARAMS, '$1$2=[REDACTED]');
 }
 
-export function redactHeaders(headers: Record<string, unknown> | undefined, opts: RedactionOptions = {}): Record<string, unknown> | undefined {
+export function redactHeaders(
+  headers: Record<string, unknown> | undefined,
+  opts: RedactionOptions = {},
+  allowSet: ReadonlySet<string> = new Set((opts.allowlist ?? []).map((key) => key.toLowerCase())),
+): Record<string, unknown> | undefined {
   if (!headers) return headers;
-  const allow = new Set((opts.allowlist ?? []).map((key) => key.toLowerCase()));
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(headers)) {
     const lower = key.toLowerCase();
-    out[key] = SENSITIVE_HEADER_NAMES.has(lower) && !allow.has(lower)
+    out[key] = SENSITIVE_HEADER_NAMES.has(lower) && !allowSet.has(lower)
       ? DEFAULT_REDACTION
-      : redactValue(value, opts, key);
+      : redactValueInternal(value, opts, allowSet, key, 0);
   }
   return out;
 }
@@ -52,8 +55,18 @@ export function redactText(text: string, opts: RedactionOptions = {}): string {
 }
 
 export function redactValue(value: unknown, opts: RedactionOptions = {}, keyHint?: string, depth: number = 0): unknown {
-  const allow = new Set((opts.allowlist ?? []).map((key) => key.toLowerCase()));
-  if (keyHint && SENSITIVE_FIELD_PATTERN.test(keyHint) && !allow.has(keyHint.toLowerCase())) {
+  const allowSet = new Set((opts.allowlist ?? []).map((key) => key.toLowerCase()));
+  return redactValueInternal(value, opts, allowSet, keyHint, depth);
+}
+
+function redactValueInternal(
+  value: unknown,
+  opts: RedactionOptions,
+  allowSet: ReadonlySet<string>,
+  keyHint?: string,
+  depth: number = 0,
+): unknown {
+  if (keyHint && SENSITIVE_FIELD_PATTERN.test(keyHint) && !allowSet.has(keyHint.toLowerCase())) {
     return DEFAULT_REDACTION;
   }
   if (typeof value === 'string') {
@@ -66,7 +79,7 @@ export function redactValue(value: unknown, opts: RedactionOptions = {}, keyHint
 
   if (Array.isArray(value)) {
     const max = opts.maxArrayItems ?? 100;
-    const items = value.slice(0, max).map((item) => redactValue(item, opts, undefined, depth + 1));
+    const items = value.slice(0, max).map((item) => redactValueInternal(item, opts, allowSet, undefined, depth + 1));
     if (value.length > max) items.push(`[truncated, ${value.length - max} items omitted]`);
     return items;
   }
@@ -78,9 +91,9 @@ export function redactValue(value: unknown, opts: RedactionOptions = {}, keyHint
     for (const [key, child] of entries.slice(0, max)) {
       if (key.toLowerCase() === 'url' && typeof child === 'string') out[key] = redactUrl(child);
       else if (key.toLowerCase().includes('headers') && child && typeof child === 'object' && !Array.isArray(child)) {
-        out[key] = redactHeaders(child as Record<string, unknown>, opts);
+        out[key] = redactHeaders(child as Record<string, unknown>, opts, allowSet);
       } else {
-        out[key] = redactValue(child, opts, key, depth + 1);
+        out[key] = redactValueInternal(child, opts, allowSet, key, depth + 1);
       }
     }
     if (entries.length > max) out.__truncated__ = `[${entries.length - max} fields omitted]`;

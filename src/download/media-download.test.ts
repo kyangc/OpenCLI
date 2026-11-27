@@ -119,4 +119,37 @@ describe('media downloads', { retry: process.platform === 'win32' ? 2 : 0 }, () 
     expect(fs.readFileSync(path.join(outputDir, 'unsafe_prefix_3.jpg'), 'utf8')).toBe('image');
     expect(fs.existsSync(path.join(parentDir, 'unsafe prefix_1.jpg'))).toBe(false);
   });
+
+  it('downloads multiple items concurrently while preserving result ordering', async () => {
+    let active = 0;
+    let maxActive = 0;
+    const baseUrl = await startServer((req, res) => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      setTimeout(() => {
+        active--;
+        res.statusCode = 200;
+        res.end(`data:${req.url}`);
+      }, 40);
+    });
+    const parentDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-media-concurrent-'));
+    tempDirs.push(parentDir);
+    const outputDir = path.join(parentDir, 'downloads');
+
+    const results = await downloadMedia([
+      { type: 'image', url: `${baseUrl}/1.jpg`, filename: '1.jpg' },
+      { type: 'image', url: `${baseUrl}/2.jpg`, filename: '2.jpg' },
+      { type: 'image', url: `${baseUrl}/3.jpg`, filename: '3.jpg' },
+      { type: 'image', url: `${baseUrl}/4.jpg`, filename: '4.jpg' },
+    ], {
+      output: outputDir,
+      verbose: false,
+      concurrency: 3,
+    });
+
+    expect(maxActive).toBeGreaterThan(1);
+    expect(results.map((r) => r.index)).toEqual([1, 2, 3, 4]);
+    expect(results.every((r) => r.status === 'success')).toBe(true);
+    expect(fs.readFileSync(path.join(outputDir, '3.jpg'), 'utf8')).toBe('data:/3.jpg');
+  });
 });

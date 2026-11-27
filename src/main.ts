@@ -93,12 +93,13 @@ if (getCompIdx !== -1) {
 // ── Full startup path ───────────────────────────────────────────────────
 // Dynamic imports: these are deferred so the fast path above never pays the cost.
 try {
-  const { discoverClis, discoverPlugins, ensureUserCliCompatShims, ensureUserAdapters } = await import('./discovery.js');
+  const { discoverClisWithOptions, discoverPlugins, ensureUserCliCompatShims, ensureUserAdapters } = await import('./discovery.js');
   const { getCompletions } = await import('./completion.js');
   const { runCli } = await import('./cli.js');
   const { emitHook } = await import('./hooks.js');
   const { installNodeNetwork } = await import('./node-network.js');
   const { registerUpdateNoticeOnExit, checkForUpdateBackground } = await import('./update-check.js');
+  const { getRegistry } = await import('./registry.js');
 
   installNodeNetwork();
 
@@ -111,16 +112,18 @@ try {
   //    intended override order (user adapters override built-in ones).
   //  - discoverPlugins runs last: plugins may override both built-in and user CLIs.
   const skipUserDiscovery = argv[0] === 'convention-audit';
+  const userCacheFile = path.join(os.homedir(), '.opencli', 'cache', 'user-cli-manifest.json');
+  const pluginCacheFile = path.join(os.homedir(), '.opencli', 'cache', 'plugin-cli-manifest.json');
   if (skipUserDiscovery) {
-    await discoverClis(BUILTIN_CLIS);
+    await discoverClisWithOptions([BUILTIN_CLIS], { skipYamlWarnings: true });
   } else {
     const [, ,] = await Promise.all([
       ensureUserCliCompatShims(),
       ensureUserAdapters(),
-      discoverClis(BUILTIN_CLIS),
+      discoverClisWithOptions([BUILTIN_CLIS], { skipYamlWarnings: true }),
     ]);
-    await discoverClis(USER_CLIS);
-    await discoverPlugins();
+    await discoverClisWithOptions([USER_CLIS], { cacheFile: userCacheFile });
+    await discoverPlugins(undefined, { cacheFile: pluginCacheFile });
   }
 
   // Register exit hook: notice appears after command output (same as npm/gh/yarn)
@@ -149,14 +152,11 @@ try {
 
   // Preserve literal leading-dash adapter arguments; browser options are parsed by Commander.
   const { escapeLeadingDashPositional } = await import('./cli-argv-preprocess.js');
-  try {
-    const manifestPath = getCliManifestPath(BUILTIN_CLIS);
-    if (fs.existsSync(manifestPath)) {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-      if (Array.isArray(manifest)) process.argv.splice(2, process.argv.length - 2,
-        ...escapeLeadingDashPositional(process.argv.slice(2), manifest));
-    }
-  } catch { /* manifest unavailable; parse the original arguments */ }
+  const registeredCommands = [...new Set(getRegistry().values())];
+  if (registeredCommands.length > 0) {
+    process.argv.splice(2, process.argv.length - 2,
+      ...escapeLeadingDashPositional(process.argv.slice(2), registeredCommands));
+  }
 
   await emitHook('onStartup', { command: '__startup__', args: {} });
   await runCli(BUILTIN_CLIS, USER_CLIS);

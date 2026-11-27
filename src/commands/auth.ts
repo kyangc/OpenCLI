@@ -5,7 +5,6 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Command, InvalidArgumentError, Option } from 'commander';
 import { AuthRequiredError, CommandExecutionError, CliError, getErrorMessage } from '../errors.js';
-import { executeCommand } from '../execution.js';
 import {
   type BrowserCliCommand,
   type CliCommand,
@@ -15,6 +14,12 @@ import {
   getRegistry,
 } from '../registry.js';
 import { render as renderOutput } from '../output.js';
+
+type ExecuteCommandFn = typeof import('../execution.js').executeCommand;
+let _executeCommandPromise: Promise<ExecuteCommandFn> | undefined;
+function getExecuteCommand(): Promise<ExecuteCommandFn> {
+  return _executeCommandPromise ??= import('../execution.js').then((mod) => mod.executeCommand);
+}
 
 type AuthStatus = 'logged_in' | 'not_logged_in' | 'unknown' | 'error';
 type AuthStatusMode = 'quick' | 'full';
@@ -312,6 +317,7 @@ async function runQuick(cmd: CliCommand, opts: { timeoutSeconds: number; profile
       };
     }
 
+    const executeCommand = await getExecuteCommand();
     const result = await executeCommand(quickCmd, { timeout: opts.timeoutSeconds } as CommandArgs, false, {
       siteSession: 'ephemeral',
       keepTab: 'false',
@@ -350,6 +356,7 @@ async function runFull(cmd: CliCommand, opts: { timeoutSeconds: number; profile?
   try {
     const loaded = await loadLazyCommand(cmd);
     const fullCmd = withTimeoutArg(loaded, opts.timeoutSeconds);
+    const executeCommand = await getExecuteCommand();
     const result = await executeCommand(fullCmd, { timeout: opts.timeoutSeconds } as CommandArgs, false, {
       siteSession: 'ephemeral',
       keepTab: 'false',
@@ -412,6 +419,7 @@ async function runRefresh(cmd: CliCommand, opts: {
       };
     }
 
+    const executeCommand = await getExecuteCommand();
     const result = await executeCommand(refreshCmd, { timeout: opts.timeoutSeconds } as CommandArgs, false, {
       siteSession: 'persistent',
       keepTab: 'true',
