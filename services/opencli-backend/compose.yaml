@@ -6,7 +6,7 @@ x-opencli-build: &opencli-build
 
 services:
   chromium:
-    image: local/opencli-chromium:2.1.0.1
+    image: local/opencli-chromium:2.1.1.1
     build:
       <<: *opencli-build
       target: chromium

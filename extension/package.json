@@ -1,12 +1,12 @@
 {
   "name": "opencli-extension",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "private": true,
   "opencli": {
     "compatRange": ">=3.0.0 <4.0.0"
   },
   "opencliFork": {
-    "release": "kyangc-ext-v2.1.0",
+    "release": "kyangc-ext-v2.1.1",
     "upstreamVersion": "1.0.26"
   },
   "type": "module",

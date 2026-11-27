@@ -113,7 +113,7 @@ curl -fsS http://192.168.50.10:18080/v1/control \
      node /app/scripts/smoke-deployment.mjs \
        --base-url http://127.0.0.1:8080 \
        --expected-daemon-version 3.1.0 \
-       --expected-extension-version 2.1.0 \
+       --expected-extension-version 2.1.1 \
        --timeout-seconds 180
    ```
 

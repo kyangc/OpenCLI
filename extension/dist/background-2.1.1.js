@@ -97,6 +97,8 @@ const frameTargetKeys = /* @__PURE__ */ new Map();
 let frameTargetCleanupRegistered = false;
 const CDP_RESPONSE_BODY_CAPTURE_LIMIT = 8 * 1024 * 1024;
 const CDP_REQUEST_BODY_CAPTURE_LIMIT = 1 * 1024 * 1024;
+const MAX_NETWORK_CAPTURE_ENTRIES = 500;
+const MAX_NETWORK_CAPTURE_TOTAL_BYTES = 32 * 1024 * 1024;
 const networkCaptures = /* @__PURE__ */ new Map();
 const CDP_COMMAND_TIMEOUT_MS = 6e4;
 const CDP_PROBE_TIMEOUT_MS = 2e3;
@@ -433,9 +435,9 @@ function clearFrameTarget(targetId) {
   if (key) frameTargets.delete(key);
   frameTargetKeys.delete(targetId);
 }
-async function ensureFrameTarget(tabId, frameId, aggressiveRetry = false, targetUrl) {
+async function ensureFrameTarget(tabId, frameId, aggressiveRetry = false, targetUrl, alreadyAttached = false) {
   registerFrameTargetCleanup();
-  await ensureAttached(tabId, aggressiveRetry);
+  if (!alreadyAttached) await ensureAttached(tabId, aggressiveRetry);
   const key = frameTargetKey(tabId, frameId);
   const existing = frameTargets.get(key);
   if (existing) return existing;
@@ -471,8 +473,8 @@ async function resolveFrameTargetId(tabId, frameId, targetUrl) {
   const candidates = targets.filter((target) => target.type === "iframe").map((target) => `${target.targetId || target.id || "?"} ${target.url || ""}`).join("; ");
   throw new Error(`No iframe target found for frame ${frameId}${targetUrl ? ` (${targetUrl})` : ""}. Candidates: ${candidates || "none"}`);
 }
-async function sendCommandInFrameTarget(tabId, frameId, method, params = {}, aggressiveRetry = false, timeoutMs = CDP_COMMAND_TIMEOUT_MS, targetUrl) {
-  const targetId = await ensureFrameTarget(tabId, frameId, aggressiveRetry, targetUrl);
+async function sendCommandInFrameTarget(tabId, frameId, method, params = {}, aggressiveRetry = false, timeoutMs = CDP_COMMAND_TIMEOUT_MS, targetUrl, alreadyAttached = false) {
+  const targetId = await ensureFrameTarget(tabId, frameId, aggressiveRetry, targetUrl, alreadyAttached);
   const target = { targetId };
   return sendDebuggerCommand(target, method, params, timeoutMs);
 }
@@ -545,12 +547,12 @@ async function evaluateInFrame(tabId, expression, frameId, aggressiveRetry = fal
       contexts?.delete(frameId);
     }
   }
-  await sendCommandInFrameTarget(tabId, frameId, "Runtime.enable", {}, aggressiveRetry, timeoutMs).catch(() => void 0);
+  await sendCommandInFrameTarget(tabId, frameId, "Runtime.enable", {}, aggressiveRetry, timeoutMs, void 0, true).catch(() => void 0);
   const result = await sendCommandInFrameTarget(tabId, frameId, "Runtime.evaluate", {
     expression,
     returnByValue: true,
     awaitPromise: true
-  }, aggressiveRetry, timeoutMs);
+  }, aggressiveRetry, timeoutMs, void 0, true);
   if (result.exceptionDetails) {
     const errMsg = result.exceptionDetails.exception?.description || result.exceptionDetails.text || "Eval error";
     throw new Error(errMsg);
@@ -573,6 +575,21 @@ function normalizeHeaders(headers) {
   }
   return out;
 }
+function entryBufferBytes(entry) {
+  return (entry.requestBodyPreview?.length ?? 0) + (entry.responsePreview?.length ?? 0);
+}
+function enforceNetworkCaptureBudget(state) {
+  let totalBytes = 0;
+  for (const record of state.entries) totalBytes += entryBufferBytes(record.entry);
+  while (state.entries.length > MAX_NETWORK_CAPTURE_ENTRIES || state.entries.length > 1 && totalBytes > MAX_NETWORK_CAPTURE_TOTAL_BYTES) {
+    const evicted = state.entries.shift();
+    if (!evicted) break;
+    totalBytes -= entryBufferBytes(evicted.entry);
+    if (state.requestToEntry.get(evicted.entry.requestId) === evicted) {
+      state.requestToEntry.delete(evicted.entry.requestId);
+    }
+  }
+}
 function getOrCreateNetworkCaptureEntry(tabId, requestId, fallback) {
   const state = networkCaptures.get(tabId);
   if (!state) return null;
@@ -594,6 +611,7 @@ function getOrCreateNetworkCaptureEntry(tabId, requestId, fallback) {
   };
   state.entries.push(record);
   state.requestToEntry.set(requestId, record);
+  enforceNetworkCaptureBudget(state);
   return record;
 }
 async function startNetworkCapture(tabId, pattern) {
@@ -691,21 +709,24 @@ function registerListeners() {
           entry.requestBodyFullSize = fullSize;
           entry.requestBodyTruncated = truncated;
         }
-        record.pendingBodyFetches += 1;
-        try {
-          const postData = await sendDebuggerCommand({ tabId }, "Network.getRequestPostData", { requestId });
-          if (postData?.postData) {
-            const raw = postData.postData;
-            const fullSize = raw.length;
-            const truncated = fullSize > CDP_REQUEST_BODY_CAPTURE_LIMIT;
-            entry.requestBodyKind = "string";
-            entry.requestBodyPreview = truncated ? raw.slice(0, CDP_REQUEST_BODY_CAPTURE_LIMIT) : raw;
-            entry.requestBodyFullSize = fullSize;
-            entry.requestBodyTruncated = truncated;
+        if (request?.hasPostData) {
+          record.pendingBodyFetches += 1;
+          try {
+            const postData = await sendDebuggerCommand({ tabId }, "Network.getRequestPostData", { requestId });
+            if (postData?.postData) {
+              const raw = postData.postData;
+              const fullSize = raw.length;
+              const truncated = fullSize > CDP_REQUEST_BODY_CAPTURE_LIMIT;
+              entry.requestBodyKind = "string";
+              entry.requestBodyPreview = truncated ? raw.slice(0, CDP_REQUEST_BODY_CAPTURE_LIMIT) : raw;
+              entry.requestBodyFullSize = fullSize;
+              entry.requestBodyTruncated = truncated;
+              enforceNetworkCaptureBudget(state);
+            }
+          } catch {
+          } finally {
+            record.pendingBodyFetches -= 1;
           }
-        } catch {
-        } finally {
-          record.pendingBodyFetches -= 1;
         }
       }
       return;
@@ -737,6 +758,7 @@ function registerListeners() {
           entry.responsePreview = body.base64Encoded ? `base64:${stored}` : stored;
           entry.responseBodyFullSize = fullSize;
           entry.responseBodyTruncated = truncated;
+          enforceNetworkCaptureBudget(state);
         } else {
           entry.responseBodyMissing = true;
           entry.responseBodyError = "Response body unavailable";
@@ -805,25 +827,46 @@ const JOURNAL_KEY = "opencli_command_journal_v1";
 const JOURNAL_MAX_ENTRIES = 64;
 const JOURNAL_RESULT_MAX_BYTES = 64 * 1024;
 let cache = null;
+let loadPromise = null;
 let writeQueue = Promise.resolve();
+let persistDirty = false;
+let persistScheduled = false;
 const inFlight = /* @__PURE__ */ new Map();
 async function load() {
   if (cache) return cache;
-  try {
-    const stored = await chrome.storage.session.get(JOURNAL_KEY);
-    cache = stored?.[JOURNAL_KEY] ?? {};
-  } catch {
-    cache = {};
+  if (!loadPromise) {
+    loadPromise = (async () => {
+      try {
+        const stored = await chrome.storage.session.get(JOURNAL_KEY);
+        cache = stored?.[JOURNAL_KEY] ?? {};
+      } catch {
+        cache = {};
+      }
+      return cache;
+    })().finally(() => {
+      loadPromise = null;
+    });
   }
-  return cache;
+  return loadPromise;
 }
 function persist() {
-  const snapshot = cache;
-  if (!snapshot) return;
+  if (!cache) return;
+  persistDirty = true;
+  if (persistScheduled) return;
+  persistScheduled = true;
   writeQueue = writeQueue.then(async () => {
     try {
-      await chrome.storage.session.set({ [JOURNAL_KEY]: snapshot });
-    } catch {
+      while (persistDirty) {
+        persistDirty = false;
+        const snapshot = cache;
+        if (!snapshot) break;
+        try {
+          await chrome.storage.session.set({ [JOURNAL_KEY]: snapshot });
+        } catch {
+        }
+      }
+    } finally {
+      persistScheduled = false;
     }
   });
 }
@@ -834,8 +877,14 @@ function trim(journal) {
   for (const id of ids.slice(0, ids.length - JOURNAL_MAX_ENTRIES)) delete journal[id];
 }
 function resultByteLength(result) {
+  if (typeof result.data === "string" && result.data.length > JOURNAL_RESULT_MAX_BYTES) {
+    return result.data.length;
+  }
   try {
-    return JSON.stringify(result).length;
+    const serialized = JSON.stringify(result);
+    if (serialized.length > JOURNAL_RESULT_MAX_BYTES) return serialized.length;
+    if (serialized.length * 3 <= JOURNAL_RESULT_MAX_BYTES) return serialized.length;
+    return new TextEncoder().encode(serialized).byteLength;
   } catch {
     return Number.POSITIVE_INFINITY;
   }
